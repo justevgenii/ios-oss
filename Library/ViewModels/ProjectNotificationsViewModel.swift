@@ -1,7 +1,7 @@
 import Foundation
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import ReactiveExtensions
 import Result
 
@@ -23,6 +23,7 @@ public protocol ProjectNotificationsViewModelType {
 public final class ProjectNotificationsViewModel: ProjectNotificationsViewModelType,
   ProjectNotificationsViewModelInputs, ProjectNotificationsViewModelOutputs {
   public init() {
+
     self.projectNotifications = self.viewDidLoadProperty.signal
       .flatMap {
         AppEnvironment.current.apiService.fetchProjectNotifications()
@@ -30,7 +31,7 @@ public final class ProjectNotificationsViewModel: ProjectNotificationsViewModelT
     }
   }
 
-  private let viewDidLoadProperty = MutableProperty()
+  fileprivate let viewDidLoadProperty = MutableProperty(())
   public func viewDidLoad() {
     self.viewDidLoadProperty.value = ()
   }

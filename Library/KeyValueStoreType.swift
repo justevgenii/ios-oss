@@ -3,151 +3,172 @@ import Foundation
 public enum AppKeys: String {
   case closedFacebookConnectInActivity = "com.kickstarter.KeyValueStoreType.closedFacebookConnectInActivity"
   case closedFindFriendsInActivity = "com.kickstarter.KeyValueStoreType.closedFindFriendsInActivity"
+  case deniedNotificationContexts = "com.kickstarter.KeyValueStoreType.deniedNotificationContexts"
   case favoriteCategoryIds = "favorite_category_ids"
   case hasSeenFavoriteCategoryAlert = "com.kickstarter.KeyValueStoreType.hasSeenFavoriteCategoryAlert"
+  case hasSeenSaveProjectAlert = "com.kickstarter.KeyValueStoreType.hasSeenSaveProjectAlert"
   case lastSeenActivitySampleId = "com.kickstarter.KeyValueStoreType.lastSeenActivitySampleId"
   case seenAppRating = "com.kickstarter.KeyValueStoreType.hasSeenAppRating"
   case seenGamesNewsletter = "com.kickstarter.KeyValueStoreType.hasSeenGamesNewsletter"
 }
 
 public protocol KeyValueStoreType: class {
-  func setBool(bool: Bool, forKey key: String)
-  func setInteger(int: Int, forKey key: String)
-  func setObject(object: AnyObject?, forKey key: String)
+  func set(_ value: Bool, forKey defaultName: String)
+  func set(_ value: Int, forKey defaultName: String)
+  func set(_ value: Any?, forKey defaultName: String)
 
-  func boolForKey(key: String) -> Bool
-  func dictionaryForKey(key: String) -> [String:AnyObject]?
-  func integerForKey(key: String) -> Int
-  func objectForKey(key: String) -> AnyObject?
-  func stringForKey(key: String) -> String?
+  func bool(forKey defaultName: String) -> Bool
+  func dictionary(forKey defaultName: String) -> [String: Any]?
+  func integer(forKey defaultName: String) -> Int
+  func object(forKey defaultName: String) -> Any?
+  func string(forKey defaultName: String) -> String?
   func synchronize() -> Bool
 
-  func removeObjectForKey(key: String)
-
+  func removeObject(forKey defaultName: String)
+  var deniedNotificationContexts: [String] { get set }
   var favoriteCategoryIds: [Int] { get set }
   var hasClosedFacebookConnectInActivity: Bool { get set }
   var hasClosedFindFriendsInActivity: Bool { get set }
   var hasSeenAppRating: Bool { get set }
   var hasSeenFavoriteCategoryAlert: Bool { get set }
   var hasSeenGamesNewsletterPrompt: Bool { get set }
+  var hasSeenSaveProjectAlert: Bool { get set }
   var lastSeenActivitySampleId: Int { get set }
 }
 
 extension KeyValueStoreType {
   public var favoriteCategoryIds: [Int] {
     get {
-      return self.objectForKey(AppKeys.favoriteCategoryIds.rawValue) as? [Int] ?? []
+      return self.object(forKey: AppKeys.favoriteCategoryIds.rawValue) as? [Int] ?? []
     }
     set {
-      self.setObject(newValue, forKey: AppKeys.favoriteCategoryIds.rawValue)
+      self.set(newValue, forKey: AppKeys.favoriteCategoryIds.rawValue)
+    }
+  }
+
+  public var deniedNotificationContexts: [String] {
+    get {
+      return self.object(forKey: AppKeys.deniedNotificationContexts.rawValue) as? [String] ?? []
+    }
+    set {
+      self.set(newValue, forKey: AppKeys.deniedNotificationContexts.rawValue)
     }
   }
 
   public var hasClosedFacebookConnectInActivity: Bool {
     get {
-      return self.objectForKey(AppKeys.closedFacebookConnectInActivity.rawValue) as? Bool ?? false
+      return self.object(forKey: AppKeys.closedFacebookConnectInActivity.rawValue) as? Bool ?? false
     }
     set {
-      self.setObject(newValue, forKey: AppKeys.closedFacebookConnectInActivity.rawValue)
+      self.set(newValue, forKey: AppKeys.closedFacebookConnectInActivity.rawValue)
     }
   }
 
   public var hasClosedFindFriendsInActivity: Bool {
     get {
-      return self.objectForKey(AppKeys.closedFindFriendsInActivity.rawValue) as? Bool ?? false
+      return self.object(forKey: AppKeys.closedFindFriendsInActivity.rawValue) as? Bool ?? false
     }
     set {
-      self.setObject(newValue, forKey: AppKeys.closedFindFriendsInActivity.rawValue)
+      self.set(newValue, forKey: AppKeys.closedFindFriendsInActivity.rawValue)
     }
   }
 
   public var hasSeenAppRating: Bool {
     get {
-      return self.boolForKey(AppKeys.seenAppRating.rawValue)
+      return self.bool(forKey: AppKeys.seenAppRating.rawValue)
     }
     set {
-      self.setBool(newValue, forKey: AppKeys.seenAppRating.rawValue)
+      self.set(newValue, forKey: AppKeys.seenAppRating.rawValue)
     }
   }
 
   public var hasSeenFavoriteCategoryAlert: Bool {
     get {
-      return self.boolForKey(AppKeys.hasSeenFavoriteCategoryAlert.rawValue)
+      return self.bool(forKey: AppKeys.hasSeenFavoriteCategoryAlert.rawValue)
     }
     set {
-      self.setBool(newValue, forKey: AppKeys.hasSeenFavoriteCategoryAlert.rawValue)
+      self.set(newValue, forKey: AppKeys.hasSeenFavoriteCategoryAlert.rawValue)
     }
   }
 
   public var hasSeenGamesNewsletterPrompt: Bool {
     get {
-      return self.boolForKey(AppKeys.seenGamesNewsletter.rawValue)
+      return self.bool(forKey: AppKeys.seenGamesNewsletter.rawValue)
     }
     set {
-      self.setBool(newValue, forKey: AppKeys.seenGamesNewsletter.rawValue)
+      self.set(newValue, forKey: AppKeys.seenGamesNewsletter.rawValue)
+    }
+  }
+
+  public var hasSeenSaveProjectAlert: Bool {
+    get {
+      return self.bool(forKey: AppKeys.hasSeenSaveProjectAlert.rawValue)
+    }
+    set {
+      self.set(newValue, forKey: AppKeys.hasSeenSaveProjectAlert.rawValue)
     }
   }
 
   public var lastSeenActivitySampleId: Int {
     get {
-      return self.integerForKey(AppKeys.lastSeenActivitySampleId.rawValue)
+      return self.integer(forKey: AppKeys.lastSeenActivitySampleId.rawValue)
     }
     set {
-      self.setInteger(newValue, forKey: AppKeys.lastSeenActivitySampleId.rawValue)
+      self.set(newValue, forKey: AppKeys.lastSeenActivitySampleId.rawValue)
     }
   }
 }
 
-extension NSUserDefaults: KeyValueStoreType {
+extension UserDefaults: KeyValueStoreType {
 }
 
 extension NSUbiquitousKeyValueStore: KeyValueStoreType {
-  public func integerForKey(key: String) -> Int {
-    return Int(longLongForKey(key))
+  public func integer(forKey defaultName: String) -> Int {
+    return Int(longLong(forKey: defaultName))
   }
 
-  public func setInteger(int: Int, forKey key: String) {
-    return setLongLong(Int64(int), forKey: key)
+  public func set(_ value: Int, forKey defaultName: String) {
+    return set(Int64(value), forKey: defaultName)
   }
 }
 
 internal class MockKeyValueStore: KeyValueStoreType {
-  var store: [String:AnyObject] = [:]
+  var store: [String: Any] = [:]
 
-  func setBool(bool: Bool, forKey key: String) {
-    self.store[key] = bool
+  func set(_ value: Bool, forKey defaultName: String) {
+    self.store[defaultName] = value
   }
 
-  func setInteger(int: Int, forKey key: String) {
-    self.store[key] = int
+  func set(_ value: Int, forKey defaultName: String) {
+    self.store[defaultName] = value
   }
 
-  func setObject(object: AnyObject?, forKey key: String) {
-    self.store[key] = object
+  func set(_ value: Any?, forKey key: String) {
+    self.store[key] = value
   }
 
-  func boolForKey(key: String) -> Bool {
-    return self.store[key] as? Bool ?? false
+  func bool(forKey defaultName: String) -> Bool {
+    return self.store[defaultName] as? Bool ?? false
   }
 
-  func integerForKey(key: String) -> Int {
-    return self.store[key] as? Int ?? 0
+  func dictionary(forKey key: String) -> [String: Any]? {
+    return self.object(forKey: key) as? [String: Any]
   }
 
-  func objectForKey(key: String) -> AnyObject? {
+  func integer(forKey defaultName: String) -> Int {
+    return self.store[defaultName] as? Int ?? 0
+  }
+
+  func object(forKey key: String) -> Any? {
     return self.store[key]
   }
 
-  func stringForKey(key: String) -> String? {
-    return self.objectForKey(key) as? String
+  func string(forKey defaultName: String) -> String? {
+    return self.store[defaultName] as? String
   }
 
-  func dictionaryForKey(key: String) -> [String:AnyObject]? {
-    return self.objectForKey(key) as? [String:AnyObject]
-  }
-
-  func removeObjectForKey(key: String) {
-    self.setObject(nil, forKey: key)
+  func removeObject(forKey defaultName: String) {
+    self.set(nil, forKey: defaultName)
   }
 
   func synchronize() -> Bool {

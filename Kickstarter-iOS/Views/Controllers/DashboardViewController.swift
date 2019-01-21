@@ -5,15 +5,17 @@ import Prelude
 import Prelude_UIKit
 
 internal final class DashboardViewController: UITableViewController {
-  @IBOutlet private weak var titleView: DashboardTitleView!
-  @IBOutlet private weak var shareButton: UIBarButtonItem!
+  @IBOutlet fileprivate weak var titleView: DashboardTitleView!
+  @IBOutlet fileprivate weak var shareButton: UIBarButtonItem!
 
-  private let dataSource = DashboardDataSource()
-  private let viewModel: DashboardViewModelType = DashboardViewModel()
-  private let shareViewModel: ShareViewModelType = ShareViewModel()
+  fileprivate let dataSource = DashboardDataSource()
+  fileprivate let viewModel: DashboardViewModelType = DashboardViewModel()
+  fileprivate let shareViewModel: ShareViewModelType = ShareViewModel()
+  fileprivate let loadingIndicatorView = UIActivityIndicatorView()
+  fileprivate let backgroundView = UIView()
 
   internal static func instantiate() -> DashboardViewController {
-    return Storyboard.Dashboard.instantiate(DashboardViewController)
+    return Storyboard.Dashboard.instantiate(DashboardViewController.self)
   }
 
   internal func `switch`(toProject param: Param) {
@@ -22,6 +24,8 @@ internal final class DashboardViewController: UITableViewController {
 
   internal override func viewDidLoad() {
     super.viewDidLoad()
+
+    self.tableView.backgroundView = self.backgroundView
 
     self.tableView.dataSource = self.dataSource
 
@@ -32,72 +36,100 @@ internal final class DashboardViewController: UITableViewController {
     self.navigationItem.rightBarButtonItem = shareButton
 
     self.titleView.delegate = self
+
+    self.viewModel.inputs.viewDidLoad()
   }
 
-  override func viewWillAppear(animated: Bool) {
+  override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
 
     self.viewModel.inputs.viewWillAppear(animated: animated)
   }
 
   override func bindStyles() {
-    self |> baseTableControllerStyle(estimatedRowHeight: 200.0)
+    _ = self
+      |> baseTableControllerStyle(estimatedRowHeight: 200.0)
+      |> UITableViewController.lens.view.backgroundColor .~ .white
 
-    self.navigationController?.navigationBar
-      ?|> baseNavigationBarStyle
+    _ = self.loadingIndicatorView
+      |> UIActivityIndicatorView.lens.hidesWhenStopped .~ true
+      |> UIActivityIndicatorView.lens.activityIndicatorViewStyle .~ .white
+      |> UIActivityIndicatorView.lens.color .~ .ksr_soft_black
   }
 
-  // swiftlint:disable function_body_length
+  override func viewWillDisappear(_ animated: Bool) {
+    super.viewWillDisappear(animated)
+
+    self.viewModel.inputs.viewWillDisappear()
+  }
+
   internal override func bindViewModel() {
     super.bindViewModel()
 
+    self.loadingIndicatorView.rac.animating = self.viewModel.outputs.loaderIsAnimating
+
+    self.viewModel.outputs.loaderIsAnimating
+      .observeForUI()
+      .observeValues { [weak self] isAnimating in
+        guard let _self = self else { return }
+        _self.tableView.tableHeaderView = isAnimating ? _self.loadingIndicatorView : nil
+        if let headerView = _self.tableView.tableHeaderView {
+          headerView.frame = CGRect(x: headerView.frame.origin.x,
+                                    y: headerView.frame.origin.y,
+                                    width: headerView.frame.size.width,
+                                    height: Styles.grid(15))
+        }
+    }
+
     self.viewModel.outputs.fundingData
       .observeForUI()
-      .observeNext { [weak self] stats, project in
+      .observeValues { [weak self] stats, project in
         self?.dataSource.load(fundingDateStats: stats, project: project)
         self?.tableView.reloadData()
     }
 
     self.viewModel.outputs.project
       .observeForUI()
-      .observeNext { [weak self] project in
+      .observeValues { [weak self] project in
         self?.dataSource.load(project: project)
         self?.tableView.reloadData()
 
         // NB: this is just temporary for now
-        self?.shareViewModel.inputs.configureWith(shareContext: .creatorDashboard(project))
+        self?.shareViewModel.inputs.configureWith(shareContext: .creatorDashboard(project),
+                                                  shareContextView: nil)
     }
 
     self.viewModel.outputs.referrerData
       .observeForUI()
-      .observeNext { [weak self] (cumulative, project, referrers) in
-        self?.dataSource.load(cumulative: cumulative, project: project, referrers: referrers)
+      .observeValues { [weak self] (cumulative, project, aggregates, referrers) in
+        self?.dataSource.load(cumulative: cumulative, project: project,
+                              aggregate: aggregates, referrers: referrers)
         self?.tableView.reloadData()
     }
 
     self.viewModel.outputs.rewardData
       .observeForUI()
-      .observeNext { [weak self] (stats, project) in
+      .observeValues { [weak self] (stats, project) in
         self?.dataSource.load(rewardStats: stats, project: project)
         self?.tableView.reloadData()
     }
 
     self.viewModel.outputs.videoStats
       .observeForUI()
-      .observeNext { [weak self] videoStats in
+      .observeValues { [weak self] videoStats in
         self?.dataSource.load(videoStats: videoStats)
         self?.tableView.reloadData()
     }
 
     self.viewModel.outputs.presentProjectsDrawer
       .observeForControllerAction()
-      .observeNext { [weak self] data in
+      .observeValues { [weak self] data in
         self?.presentProjectsDrawer(data: data)
     }
 
     self.viewModel.outputs.animateOutProjectsDrawer
       .observeForControllerAction()
-      .observeNext { [weak self] in
+      .observeValues { [weak self] in
         if let drawerVC = self?.presentedViewController as? DashboardProjectsDrawerViewController {
           drawerVC.animateOut()
         }
@@ -105,37 +137,54 @@ internal final class DashboardViewController: UITableViewController {
 
     self.viewModel.outputs.dismissProjectsDrawer
       .observeForControllerAction()
-      .observeNext { [weak self] in
-        self?.dismissViewControllerAnimated(false, completion: nil)
+      .observeValues { [weak self] in
+        self?.dismiss(animated: false, completion: nil)
     }
 
     self.viewModel.outputs.updateTitleViewData
       .observeForControllerAction()
-      .observeNext { [weak element = self.titleView] data in
+      .observeValues { [weak element = self.titleView] data in
         element?.updateData(data)
+    }
+
+    self.viewModel.outputs.goToMessages
+      .observeForControllerAction()
+      .observeValues { [weak self] project in
+        self?.goToMessages(project: project)
     }
 
     self.viewModel.outputs.goToProject
       .observeForControllerAction()
-      .observeNext { [weak self] project, projects, reftag in
-        self?.goToProject(project, projects: projects, refTag: reftag)
+      .observeValues { [weak self] project, reftag in
+        self?.goToProject(project, refTag: reftag)
     }
 
     self.viewModel.outputs.focusScreenReaderOnTitleView
       .observeForControllerAction()
-      .observeNext { [weak self] in
+      .observeValues { [weak self] in
         self?.accessibilityFocusOnTitleView()
     }
 
     self.shareViewModel.outputs.showShareSheet
       .observeForControllerAction()
-      .observeNext { [weak self] in self?.showShareSheet($0) }
-  }
-  // swiftlint:enable function_body_length
+      .observeValues { [weak self] controller, _ in self?.showShareSheet(controller) }
 
-  internal override func tableView(tableView: UITableView,
-                                   willDisplayCell cell: UITableViewCell,
-                                   forRowAtIndexPath indexPath: NSIndexPath) {
+    self.viewModel.outputs.goToMessageThread
+      .observeForControllerAction()
+      .observeValues { [weak self] project, messageThread in
+        self?.goToMessageThread(project: project, messageThread: messageThread)
+    }
+
+    self.viewModel.outputs.goToActivities
+      .observeForControllerAction()
+      .observeValues { [weak self] project in
+        self?.goToActivity(project)
+    }
+  }
+
+  internal override func tableView(_ tableView: UITableView,
+                                   willDisplay cell: UITableViewCell,
+                                   forRowAt indexPath: IndexPath) {
     if let actionCell = cell as? DashboardActionCell {
       actionCell.delegate = self
     } else if let referrersCell = cell as? DashboardReferrersCell {
@@ -145,98 +194,115 @@ internal final class DashboardViewController: UITableViewController {
     }
   }
 
-  private func goToActivity(project: Project) {
+  fileprivate func goToActivity(_ project: Project) {
     let vc = ProjectActivitiesViewController.configuredWith(project: project)
     self.navigationController?.pushViewController(vc, animated: true)
+
     self.navigationItem.backBarButtonItem = UIBarButtonItem.back(nil, selector: nil)
   }
 
-  internal override func tableView(tableView: UITableView, didSelectRowAtIndexPath indexPath: NSIndexPath) {
-    let cell = tableView.cellForRowAtIndexPath(indexPath)
-    if let _ = cell as? DashboardContextCell {
+  internal override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+    let cell = tableView.cellForRow(at: indexPath)
+    if cell as? DashboardContextCell != nil {
       self.viewModel.inputs.projectContextCellTapped()
     }
   }
 
   private func goToMessages(project: Project) {
-    let vc = MessageThreadsViewController.configuredWith(project: project)
+    let vc = MessageThreadsViewController.configuredWith(project: project, refTag: .dashboard)
     self.navigationController?.pushViewController(vc, animated: true)
   }
 
-  private func goToPostUpdate(project: Project) {
+  fileprivate func goToPostUpdate(_ project: Project) {
     let vc = UpdateDraftViewController.configuredWith(project: project)
     vc.delegate = self
 
     let nav = UINavigationController(rootViewController: vc)
-    nav.modalPresentationStyle = .FormSheet
+    nav.modalPresentationStyle = .formSheet
 
-    self.presentViewController(nav, animated: true, completion: nil)
+    self.present(nav, animated: true, completion: nil)
   }
 
-  private func goToProject(project: Project, projects: [Project], refTag: RefTag) {
-    let vc = ProjectNavigatorViewController.configuredWith(project: project,
-                                                           refTag: refTag,
-                                                           initialPlaylist: projects,
-                                                           navigatorDelegate: self)
-    self.presentViewController(vc, animated: true, completion: nil)
+  private func goToProject(_ project: Project, refTag: RefTag) {
+    let vc = ProjectNavigatorViewController.configuredWith(project: project, refTag: refTag)
+    self.present(vc, animated: true, completion: nil)
   }
 
-  private func presentProjectsDrawer(data data: [ProjectsDrawerData]) {
+  private func presentProjectsDrawer(data: [ProjectsDrawerData]) {
     let vc = DashboardProjectsDrawerViewController.configuredWith(data: data)
     vc.delegate = self
-    self.modalPresentationStyle = .OverCurrentContext
-    self.presentViewController(vc, animated: false, completion: nil)
+    self.modalPresentationStyle = .overCurrentContext
+    self.present(vc, animated: false, completion: nil)
   }
 
-  private func showShareSheet(controller: UIActivityViewController) {
-    controller.completionWithItemsHandler = { [weak self] in
-      self?.shareViewModel.inputs.shareActivityCompletion(activityType: $0,
-                                                          completed: $1,
-                                                          returnedItems: $2,
-                                                          activityError: $3)
+  private func showShareSheet(_ controller: UIActivityViewController) {
+
+    controller.completionWithItemsHandler = { [weak self] activityType, completed, returnedItems, error in
+
+      self?.shareViewModel.inputs.shareActivityCompletion(
+        with: .init(activityType: activityType,
+                    completed: completed,
+                    returnedItems: returnedItems,
+                    activityError: error)
+      )
     }
 
-    if UIDevice.currentDevice().userInterfaceIdiom == .Pad {
-      controller.modalPresentationStyle = .Popover
+    if UIDevice.current.userInterfaceIdiom == .pad {
+      controller.modalPresentationStyle = .popover
       controller.popoverPresentationController?.barButtonItem = self.navigationItem.rightBarButtonItem
-      self.presentViewController(controller, animated: true, completion: nil)
+      self.present(controller, animated: true, completion: nil)
 
     } else {
-      self.presentViewController(controller, animated: true, completion: nil)
+      self.present(controller, animated: true, completion: nil)
     }
   }
 
   private func accessibilityFocusOnTitleView() {
-    UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, self.titleView)
+    UIAccessibility.post(notification: UIAccessibility.Notification.screenChanged, argument: self.titleView)
   }
 
-  @objc private func shareButtonTapped() {
+  @objc fileprivate func shareButtonTapped() {
     self.shareViewModel.inputs.shareButtonTapped()
+  }
+
+  private func goToMessageThread(project: Project, messageThread: MessageThread) {
+    let threadsVC = MessageThreadsViewController.configuredWith(project: project, refTag: .dashboard)
+    let messageThreadVC = MessagesViewController.configuredWith(messageThread: messageThread)
+
+    self.navigationController?.setViewControllers([self, threadsVC, messageThreadVC], animated: true)
+  }
+
+  public func navigateToProjectMessageThread(projectId: Param, messageThread: MessageThread) {
+    self.viewModel.inputs.messageThreadNavigated(projectId: projectId, messageThread: messageThread)
+  }
+
+  public func navigateToProjectActivities(projectId: Param) {
+    self.viewModel.inputs.activitiesNavigated(projectId: projectId)
   }
 }
 
 extension DashboardViewController: DashboardActionCellDelegate {
-  internal func goToActivity(cell: DashboardActionCell?, project: Project) {
+  internal func goToActivity(_ cell: DashboardActionCell?, project: Project) {
     self.goToActivity(project)
   }
 
-  internal func goToMessages(cell: DashboardActionCell?, project: Project) {
-    self.goToMessages(project)
+  internal func goToMessages(_ cell: DashboardActionCell?) {
+    self.viewModel.inputs.messagesCellTapped()
   }
 
-  internal func goToPostUpdate(cell: DashboardActionCell?, project: Project) {
+  internal func goToPostUpdate(_ cell: DashboardActionCell?, project: Project) {
     self.goToPostUpdate(project)
   }
 }
 
 extension DashboardViewController: UpdateDraftViewControllerDelegate {
-  func updateDraftViewControllerWantsDismissal(updateDraftViewController: UpdateDraftViewController) {
-    self.dismissViewControllerAnimated(true, completion: nil)
+  func updateDraftViewControllerWantsDismissal(_ updateDraftViewController: UpdateDraftViewController) {
+    self.dismiss(animated: true, completion: nil)
   }
 }
 
 extension DashboardViewController: DashboardReferrersCellDelegate {
-  func dashboardReferrersCellDidAddReferrerRows(cell: DashboardReferrersCell?) {
+  func dashboardReferrersCellDidAddReferrerRows(_ cell: DashboardReferrersCell?) {
     let inset = self.tableView.contentInset
     self.tableView.contentInset = UIEdgeInsets(top: 0.0, left: 0.0, bottom: 1000, right: 0.0)
 
@@ -248,14 +314,14 @@ extension DashboardViewController: DashboardReferrersCellDelegate {
 }
 
 extension DashboardViewController: DashboardRewardsCellDelegate {
-  func dashboardRewardsCellDidAddRewardRows(cell: DashboardRewardsCell?) {
+  func dashboardRewardsCellDidAddRewardRows(_ cell: DashboardRewardsCell?) {
     self.tableView.beginUpdates()
     self.tableView.endUpdates()
   }
 }
 
 extension DashboardViewController: DashboardProjectsDrawerViewControllerDelegate {
-  func dashboardProjectsDrawerCellDidTapProject(project: Project) {
+  func dashboardProjectsDrawerCellDidTapProject(_ project: Project) {
     self.viewModel.inputs.`switch`(toProject: .id(project.id))
   }
 
@@ -274,5 +340,4 @@ extension DashboardViewController: DashboardTitleViewDelegate {
   }
 }
 
-extension DashboardViewController: ProjectNavigatorDelegate {
-}
+extension DashboardViewController: TabBarControllerScrollable { }

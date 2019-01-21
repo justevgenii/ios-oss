@@ -1,6 +1,6 @@
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import Result
 
 public protocol MessagesViewModelInputs {
@@ -8,10 +8,10 @@ public protocol MessagesViewModelInputs {
   func backingInfoPressed()
 
   /// Configures the view model with either a message thread or a project and a backing.
-  func configureWith(data data: Either<MessageThread, (project: Project, backing: Backing)>)
+  func configureWith(data: Either<MessageThread, (project: Project, backing: Backing)>)
 
   /// Call when the message dialog has told us that a message was successfully posted.
-  func messageSent(message: Message)
+  func messageSent(_ message: Message)
 
   /// Call when the project banner is tapped.
   func projectBannerTapped()
@@ -24,8 +24,14 @@ public protocol MessagesViewModelInputs {
 }
 
 public protocol MessagesViewModelOutputs {
-  /// Emits a backing and project that can be used to popular the backing info header.
-  var backingAndProject: Signal<(Backing, Project), NoError> { get }
+  /** 
+   Emits a Backing and Project that can be used to populate the BackingCell.
+   The boolean tells if navigation to this screen occurred from the backing info screen.
+  */
+  var backingAndProjectAndIsFromBacking: Signal<(Backing, Project, Bool), NoError> { get }
+
+  /// Emits a boolean that determines if the empty state is visible and a message to display.
+  var emptyStateIsVisibleAndMessageToUser: Signal<(Bool, String), NoError> { get }
 
   /// Emits when we should go to the backing screen.
   var goToBacking: Signal<(Project, User), NoError> { get }
@@ -42,6 +48,9 @@ public protocol MessagesViewModelOutputs {
   /// Emits the project we are viewing the messages for.
   var project: Signal<Project, NoError> { get }
 
+  /// Emits a bool whether the reply button is enabled.
+  var replyButtonIsEnabled: Signal<Bool, NoError> { get }
+
   /// Emits when the thread has been marked as read.
   var successfullyMarkedAsRead: Signal<(), NoError> { get }
 }
@@ -54,19 +63,18 @@ public protocol MessagesViewModelType {
 public final class MessagesViewModel: MessagesViewModelType, MessagesViewModelInputs,
 MessagesViewModelOutputs {
 
-  // swiftlint:disable function_body_length
-  public init() {
-    let configData = self.configData.signal.ignoreNil()
+    public init() {
+    let configData = self.configData.signal.skipNil()
       .takeWhen(self.viewDidLoadProperty.signal)
 
     let configBacking = configData.map { $0.right?.backing }
 
     let configThread = configData.map { $0.left }
-      .ignoreNil()
+      .skipNil()
 
     let currentUser = self.viewDidLoadProperty.signal
       .map { AppEnvironment.current.currentUser }
-      .ignoreNil()
+      .skipNil()
 
     self.project = configData
       .map {
@@ -79,42 +87,49 @@ MessagesViewModelOutputs {
     }
 
     let backingOrThread = Signal.merge(
-      configBacking.ignoreNil().map(Either.left),
+      configBacking.skipNil().map(Either.left),
       configThread.map(Either.right)
     )
 
-    let messageThreadEnvelope = Signal.merge(
+    let messageThreadEnvelopeEvent = Signal.merge(
       backingOrThread,
       backingOrThread.takeWhen(self.messageSentProperty.signal)
       )
-      .switchMap { backingOrThread -> SignalProducer<MessageThreadEnvelope, NoError> in
-
+      .switchMap { backingOrThread
+        -> SignalProducer<Signal<MessageThreadEnvelope?, ErrorEnvelope>.Event, NoError> in
         switch backingOrThread {
         case let .left(backing):
           return AppEnvironment.current.apiService.fetchMessageThread(backing: backing)
-            .demoteErrors()
+            .ksr_delay(AppEnvironment.current.apiDelayInterval, on: AppEnvironment.current.scheduler)
+            .materialize()
         case let .right(thread):
           return AppEnvironment.current.apiService.fetchMessageThread(messageThreadId: thread.id)
-            .demoteErrors()
+            .ksr_delay(AppEnvironment.current.apiDelayInterval, on: AppEnvironment.current.scheduler)
+            .map(MessageThreadEnvelope?.some)
+            .materialize()
         }
     }
 
+    let messageThreadEnvelope = messageThreadEnvelopeEvent.values().skipNil()
+
     let participant = messageThreadEnvelope.map { $0.messageThread.participant }
 
-    self.backingAndProject = combineLatest(configBacking, self.project, participant, currentUser)
-      .switchMap { value -> SignalProducer<(Backing, Project), NoError> in
+    self.backingAndProjectAndIsFromBacking = Signal.combineLatest(
+      configBacking, self.project, participant, currentUser
+      )
+      .switchMap { value -> SignalProducer<(Backing, Project, Bool), NoError> in
         let (backing, project, participant, currentUser) = value
 
         if let backing = backing {
-          return SignalProducer(value: (backing, project))
+          return SignalProducer(value: (backing, project, true))
         }
 
-        let request = project.personalization.isBacking == .Some(true)
+        let request = project.personalization.isBacking == .some(true)
           ? AppEnvironment.current.apiService.fetchBacking(forProject: project, forUser: currentUser)
           : AppEnvironment.current.apiService.fetchBacking(forProject: project, forUser: participant)
 
         return request
-          .map { ($0, project) }
+          .map { ($0, project, false) }
           .demoteErrors()
     }
 
@@ -122,14 +137,36 @@ MessagesViewModelOutputs {
       .map { $0.messages }
       .sort { $0.id > $1.id }
 
+    self.emptyStateIsVisibleAndMessageToUser = Signal.merge(
+      self.viewDidLoadProperty.signal.mapConst((false, "")),
+      Signal.combineLatest(
+        messageThreadEnvelopeEvent.values().filter(isNil),
+        configBacking.skipNil(),
+        self.project
+        )
+        .map { _, backing, project in
+          let isCreatorOrCollaborator = !project.memberData.permissions.isEmpty
+            && backing.backer != AppEnvironment.current.currentUser
+          let message = isCreatorOrCollaborator
+            ? Strings.messages_empty_state_message_creator()
+            : Strings.messages_empty_state_message_backer()
+          return (true, message)
+      }
+    )
+
+    self.replyButtonIsEnabled = Signal.merge(
+      self.viewDidLoadProperty.signal.mapConst(false),
+      self.messages.map { !$0.isEmpty }
+    )
+
     self.presentMessageDialog = messageThreadEnvelope
       .map { ($0.messageThread, .messages) }
       .takeWhen(self.replyButtonPressedProperty.signal)
 
-    self.goToBacking = combineLatest(messageThreadEnvelope, currentUser)
+    self.goToBacking = Signal.combineLatest(messageThreadEnvelope, currentUser)
       .takeWhen(self.backingInfoPressedProperty.signal)
       .map { env, currentUser in
-        env.messageThread.project.personalization.isBacking == .Some(true)
+        env.messageThread.project.personalization.isBacking == .some(true)
           ? (env.messageThread.project, currentUser)
           : (env.messageThread.project, env.messageThread.participant)
     }
@@ -144,46 +181,48 @@ MessagesViewModelOutputs {
       }
       .ignoreValues()
 
-    combineLatest(project, self.viewDidLoadProperty.signal)
-      .take(1)
-      .observeNext { project, _ in
+    Signal.combineLatest(project, self.viewDidLoadProperty.signal)
+      .take(first: 1)
+      .observeValues { project, _ in
         AppEnvironment.current.koala.trackMessageThreadView(project: project)
     }
   }
   // swiftlint:enable function_body_length
 
-  private let backingInfoPressedProperty = MutableProperty()
+  private let backingInfoPressedProperty = MutableProperty(())
   public func backingInfoPressed() {
     self.backingInfoPressedProperty.value = ()
   }
   private let configData = MutableProperty<Either<MessageThread, (project: Project, backing: Backing)>?>(nil)
-  public func configureWith(data data: Either<MessageThread, (project: Project, backing: Backing)>) {
+  public func configureWith(data: Either<MessageThread, (project: Project, backing: Backing)>) {
     self.configData.value = data
   }
 
   private let messageSentProperty = MutableProperty<Message?>(nil)
-  public func messageSent(message: Message) {
+  public func messageSent(_ message: Message) {
     self.messageSentProperty.value = message
   }
-  private let projectBannerTappedProperty = MutableProperty()
+  private let projectBannerTappedProperty = MutableProperty(())
   public func projectBannerTapped() {
     self.projectBannerTappedProperty.value = ()
   }
-  private let replyButtonPressedProperty = MutableProperty()
+  private let replyButtonPressedProperty = MutableProperty(())
   public func replyButtonPressed() {
     self.replyButtonPressedProperty.value = ()
   }
-  private let viewDidLoadProperty = MutableProperty()
+  private let viewDidLoadProperty = MutableProperty(())
   public func viewDidLoad() {
     self.viewDidLoadProperty.value = ()
   }
 
-  public let backingAndProject: Signal<(Backing, Project), NoError>
+  public let backingAndProjectAndIsFromBacking: Signal<(Backing, Project, Bool), NoError>
+  public let emptyStateIsVisibleAndMessageToUser: Signal<(Bool, String), NoError>
   public let goToBacking: Signal<(Project, User), NoError>
   public let goToProject: Signal<(Project, RefTag), NoError>
   public let messages: Signal<[Message], NoError>
   public let presentMessageDialog: Signal<(MessageThread, Koala.MessageDialogContext), NoError>
   public let project: Signal<Project, NoError>
+  public let replyButtonIsEnabled: Signal<Bool, NoError>
   public let successfullyMarkedAsRead: Signal<(), NoError>
 
   public var inputs: MessagesViewModelInputs { return self }

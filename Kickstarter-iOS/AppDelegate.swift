@@ -1,3 +1,5 @@
+import Crashlytics
+import Fabric
 import FBSDKCoreKit
 import Foundation
 import HockeySDK
@@ -8,29 +10,35 @@ import HockeySDK
 #endif
 import Kickstarter_Framework
 import Library
+import LiveStream
 import Prelude
-import ReactiveCocoa
 import ReactiveExtensions
+import ReactiveSwift
 import Result
+import SafariServices
 import UIKit
+import UserNotifications
 
 @UIApplicationMain
-final class AppDelegate: UIResponder, UIApplicationDelegate {
+internal final class AppDelegate: UIResponder, UIApplicationDelegate {
   var window: UIWindow?
-  private let viewModel: AppDelegateViewModelType = AppDelegateViewModel()
+  fileprivate let viewModel: AppDelegateViewModelType = AppDelegateViewModel()
 
   internal var rootTabBarController: RootTabBarViewController? {
     return self.window?.rootViewController as? RootTabBarViewController
   }
 
-  // swiftlint:disable function_body_length
-  func application(application: UIApplication,
-                   didFinishLaunchingWithOptions launchOptions: [NSObject: AnyObject]?) -> Bool {
+  func application(
+    _ application: UIApplication,
+    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+
+    UIView.doBadSwizzleStuff()
+    UIViewController.doBadSwizzleStuff()
 
     AppEnvironment.replaceCurrentEnvironment(
       AppEnvironment.fromStorage(
-        ubiquitousStore: NSUbiquitousKeyValueStore.defaultStore(),
-        userDefaults: NSUserDefaults.standardUserDefaults()
+        ubiquitousStore: NSUbiquitousKeyValueStore.default,
+        userDefaults: UserDefaults.standard
       )
     )
 
@@ -39,143 +47,207 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     AppEnvironment.replaceCurrentEnvironment(facebookAppDelegate: FBSDKApplicationDelegate.sharedInstance())
 
     #if DEBUG
-      if Secrets.isOSS {
+      if KsApi.Secrets.isOSS {
         AppEnvironment.replaceCurrentEnvironment(apiService: MockService())
       }
     #endif
 
     self.viewModel.outputs.updateCurrentUserInEnvironment
       .observeForUI()
-      .observeNext { [weak self] user in
+      .observeValues { [weak self] user in
         AppEnvironment.updateCurrentUser(user)
         self?.viewModel.inputs.currentUserUpdatedInEnvironment()
     }
 
     self.viewModel.outputs.forceLogout
       .observeForUI()
-      .observeNext {
+      .observeValues {
         AppEnvironment.logout()
-        NSNotificationCenter.defaultCenter().postNotification(
-          NSNotification(name: CurrentUserNotifications.sessionEnded, object: nil)
-        )
+        NotificationCenter.default.post(.init(name: .ksr_sessionEnded, object: nil))
     }
 
     self.viewModel.outputs.updateConfigInEnvironment
       .observeForUI()
-      .observeNext { AppEnvironment.updateConfig($0) }
+      .observeValues { AppEnvironment.updateConfig($0) }
 
     self.viewModel.outputs.postNotification
       .observeForUI()
-      .observeNext(NSNotificationCenter.defaultCenter().postNotification)
+      .observeValues(NotificationCenter.default.post)
 
     self.viewModel.outputs.presentViewController
       .observeForUI()
-      .observeNext { [weak self] in
-        self?.rootTabBarController?.dismissViewControllerAnimated(true, completion: nil)
-        self?.rootTabBarController?.presentViewController($0, animated: true, completion: nil)
+      .observeValues { [weak self] in
+        self?.rootTabBarController?.dismiss(animated: true, completion: nil)
+        self?.rootTabBarController?.present($0, animated: true, completion: nil)
     }
 
     self.viewModel.outputs.goToDiscovery
       .observeForUI()
-      .observeNext { [weak self] in self?.rootTabBarController?.switchToDiscovery(params: $0) }
+      .observeValues { [weak self] in self?.rootTabBarController?.switchToDiscovery(params: $0) }
 
     self.viewModel.outputs.goToActivity
       .observeForUI()
-      .observeNext { [weak self] in self?.rootTabBarController?.switchToActivities() }
+      .observeValues { [weak self] in self?.rootTabBarController?.switchToActivities() }
 
     self.viewModel.outputs.goToDashboard
       .observeForUI()
-      .observeNext { [weak self] in self?.rootTabBarController?.switchToDashboard(project: $0) }
+      .observeValues { [weak self] in self?.rootTabBarController?.switchToDashboard(project: $0) }
+
+    self.viewModel.outputs.goToLiveStream
+      .observeForControllerAction()
+      .observeValues { [weak self] in
+        self?.goToLiveStream(project: $0, liveStreamEvent: $1, refTag: $2)
+    }
+
+    self.viewModel.outputs.goToCreatorMessageThread
+      .observeForUI()
+      .observeValues { [weak self] in
+        self?.goToCreatorMessageThread($0, $1)
+      }
 
     self.viewModel.outputs.goToMessageThread
       .observeForUI()
-      .observeNext { [weak self] in self?.goToMessageThread($0) }
+      .observeValues { [weak self] in self?.goToMessageThread($0) }
+
+    self.viewModel.outputs.goToProjectActivities
+      .observeForUI()
+      .observeValues { [weak self] in
+        self?.goToProjectActivities($0)
+    }
 
     self.viewModel.outputs.goToSearch
       .observeForUI()
-      .observeNext { [weak self] in self?.rootTabBarController?.switchToSearch() }
+      .observeValues { [weak self] in self?.rootTabBarController?.switchToSearch() }
 
-    self.viewModel.outputs.registerUserNotificationSettings
+    self.viewModel.outputs.goToMobileSafari
       .observeForUI()
-      .observeNext {
-        UIApplication.sharedApplication().registerUserNotificationSettings(
-          UIUserNotificationSettings(forTypes: .Alert, categories: [])
-        )
-        UIApplication.sharedApplication().registerForRemoteNotifications()
+      .observeValues { UIApplication.shared.open($0) }
+
+    self.viewModel.outputs.applicationIconBadgeNumber
+      .observeForUI()
+      .observeValues { UIApplication.shared.applicationIconBadgeNumber = $0 }
+
+    self.viewModel.outputs.pushTokenRegistrationStarted
+      .observeForUI()
+      .observeValues {
+        print("📲 [Push Registration] Push token registration started 🚀")
+    }
+
+    self.viewModel.outputs.pushTokenSuccessfullyRegistered
+      .observeForUI()
+      .observeValues { token in
+        print("📲 [Push Registration] Push token successfully registered (\(token)) ✨")
+    }
+
+    self.viewModel.outputs.showAlert
+      .observeForUI()
+      .observeValues { [weak self] in
+        self?.presentContextualPermissionAlert($0)
     }
 
     self.viewModel.outputs.unregisterForRemoteNotifications
       .observeForUI()
-      .observeNext(UIApplication.sharedApplication().unregisterForRemoteNotifications)
-
-    self.viewModel.outputs.presentRemoteNotificationAlert
-      .observeForUI()
-      .observeNext { [weak self] in self?.presentRemoteNotificationAlert($0) }
+      .observeValues(UIApplication.shared.unregisterForRemoteNotifications)
 
     self.viewModel.outputs.configureHockey
       .observeForUI()
-      .observeNext { [weak self] data in
+      .observeValues { [weak self] data in
         guard let _self = self else { return }
-        let manager = BITHockeyManager.sharedHockeyManager()
+        let manager = BITHockeyManager.shared()
         manager.delegate = _self
-        manager.configureWithIdentifier(data.appIdentifier)
-        manager.crashManager.crashManagerStatus = .AutoSend
-        manager.disableUpdateManager = data.disableUpdates
+        manager.configure(withIdentifier: data.appIdentifier)
+        manager.crashManager.crashManagerStatus = .disabled
+        manager.isUpdateManagerDisabled = data.disableUpdates
         manager.userID = data.userId
         manager.userName = data.userName
-        manager.startManager()
+        manager.start()
         manager.authenticator.authenticateInstallation()
     }
 
+    #if RELEASE || HOCKEY
+    self.viewModel.outputs.configureFabric
+      .observeForUI()
+      .observeValues {
+        Fabric.with([Crashlytics.self])
+        AppEnvironment.current.koala.logEventCallback = { event, _ in
+          CLSLogv("%@", getVaList([event]))
+        }
+    }
+    #endif
+
     self.viewModel.outputs.synchronizeUbiquitousStore
       .observeForUI()
-      .observeNext {
-        AppEnvironment.current.ubiquitousStore.synchronize()
+      .observeValues {
+        _ = AppEnvironment.current.ubiquitousStore.synchronize()
     }
 
     self.viewModel.outputs.setApplicationShortcutItems
       .observeForUI()
-      .observeNext { shortcutItems in
-        UIApplication.sharedApplication().shortcutItems = shortcutItems.map { $0.applicationShortcutItem }
+      .observeValues { shortcutItems in
+        UIApplication.shared.shortcutItems = shortcutItems.map { $0.applicationShortcutItem }
     }
 
-    NSNotificationCenter
-      .defaultCenter()
-      .addObserverForName(CurrentUserNotifications.sessionStarted, object: nil, queue: nil) { [weak self] _ in
+    self.viewModel.outputs.findRedirectUrl
+      .observeForUI()
+      .observeValues { [weak self] in self?.findRedirectUrl($0) }
+
+    //swiftlint:disable discarded_notification_center_observer
+    NotificationCenter.default
+      .addObserver(forName: Notification.Name.ksr_sessionStarted, object: nil, queue: nil) { [weak self] _ in
         self?.viewModel.inputs.userSessionStarted()
     }
 
-    NSNotificationCenter
-      .defaultCenter()
-      .addObserverForName(CurrentUserNotifications.sessionEnded, object: nil, queue: nil) { [weak self] _ in
-        self?.viewModel.inputs.userSessionEnded()
+    NotificationCenter.default
+      .addObserver(
+        forName: Notification.Name.ksr_showNotificationsDialog, object: nil, queue: nil) { [weak self] in
+        self?.viewModel.inputs.showNotificationDialog(notification: $0)
     }
 
-    self.window?.tintColor = .ksr_navy_700
+    NotificationCenter.default
+      .addObserver(forName: Notification.Name.ksr_sessionEnded, object: nil, queue: nil) { [weak self] _ in
+        self?.viewModel.inputs.userSessionEnded()
+    }
+    //swiftlint:enable discarded_notification_center_observer
 
-    self.viewModel.inputs
-      .applicationDidFinishLaunching(application: application, launchOptions: launchOptions)
+    self.window?.tintColor = .ksr_green_700
+
+    self.viewModel.inputs.applicationDidFinishLaunching(application: application,
+                                                        launchOptions: launchOptions)
+
+    UNUserNotificationCenter.current().delegate = self
 
     return self.viewModel.outputs.applicationDidFinishLaunchingReturnValue
   }
-  // swiftlint:enable function_body_length
 
-  func applicationWillEnterForeground(application: UIApplication) {
+  func applicationWillEnterForeground(_ application: UIApplication) {
     self.viewModel.inputs.applicationWillEnterForeground()
   }
 
-  func applicationDidEnterBackground(application: UIApplication) {
+  func applicationDidEnterBackground(_ application: UIApplication) {
     self.viewModel.inputs.applicationDidEnterBackground()
   }
 
-  func application(application: UIApplication, continueUserActivity userActivity: NSUserActivity,
-                   restorationHandler: ([AnyObject]?) -> Void) -> Bool {
+  func application(_ application: UIApplication,
+                   continue userActivity: NSUserActivity,
+                   restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
 
     return self.viewModel.inputs.applicationContinueUserActivity(userActivity)
   }
 
-  func application(application: UIApplication, openURL url: NSURL, sourceApplication: String?,
-                   annotation: AnyObject) -> Bool {
+  func application(_ app: UIApplication, open url: URL,
+                   options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+    guard let sourceApplication = options[.sourceApplication] as? String else { return false }
+
+    return self.viewModel.inputs.applicationOpenUrl(application: app,
+                                                    url: url,
+                                                    sourceApplication: sourceApplication,
+                                                    annotation: options[.annotation] as Any)
+  }
+
+  func application(_ application: UIApplication,
+                   open url: URL,
+                   sourceApplication: String?,
+                   annotation: Any) -> Bool {
 
     return self.viewModel.inputs.applicationOpenUrl(application: application,
                                                     url: url,
@@ -183,62 +255,141 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                                                     annotation: annotation)
   }
 
-  internal func application(application: UIApplication,
-                            didRegisterForRemoteNotificationsWithDeviceToken deviceToken: NSData) {
+  // MARK: - Remote notifications
+
+  internal func application(_ application: UIApplication,
+                            didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
     self.viewModel.inputs.didRegisterForRemoteNotifications(withDeviceTokenData: deviceToken)
   }
 
-  internal func application(application: UIApplication,
-                            didReceiveRemoteNotification userInfo: [NSObject: AnyObject]) {
-
-    self.viewModel.inputs.didReceive(remoteNotification: userInfo,
-                                     applicationIsActive: application.applicationState == .Active)
+  internal func application(_ application: UIApplication,
+                            didFailToRegisterForRemoteNotificationsWithError error: Error) {
+    print("🔴 Failed to register for remote notifications: \(error.localizedDescription)")
   }
 
-  internal func application(application: UIApplication,
-                            didReceiveLocalNotification notification: UILocalNotification) {
-
-    if let userInfo = notification.userInfo where userInfo["aps"] != nil {
-      self.viewModel.inputs.didReceive(remoteNotification: userInfo,
-                                       applicationIsActive: application.applicationState == .Active)
-    }
-  }
-
-  internal func applicationDidReceiveMemoryWarning(application: UIApplication) {
+  internal func applicationDidReceiveMemoryWarning(_ application: UIApplication) {
     self.viewModel.inputs.applicationDidReceiveMemoryWarning()
   }
 
-  internal func application(application: UIApplication,
-                            performActionForShortcutItem shortcutItem: UIApplicationShortcutItem,
-                                                         completionHandler: (Bool) -> Void) {
+  internal func application(_ application: UIApplication,
+                            performActionFor shortcutItem: UIApplicationShortcutItem,
+                            completionHandler: @escaping (Bool) -> Void) {
 
     self.viewModel.inputs.applicationPerformActionForShortcutItem(shortcutItem)
     completionHandler(true)
   }
 
-  private func presentRemoteNotificationAlert(message: String) {
-    let alert = UIAlertController(title: nil, message: message, preferredStyle: .Alert)
+  fileprivate func presentContextualPermissionAlert(_ notification: Notification) {
+
+    guard let context = notification.userInfo?.values.first as? PushNotificationDialog.Context else {
+      return
+    }
+
+    let alert = UIAlertController(title: context.title, message: context.message, preferredStyle: .alert)
 
     alert.addAction(
-      UIAlertAction(title: Strings.View(), style: .Default) { [weak self] _ in
-        self?.viewModel.inputs.openRemoteNotificationTappedOk()
+      UIAlertAction(title: Strings.project_star_ok(), style: .default) { [weak self] _ in
+        self?.viewModel.inputs.didAcceptReceivingRemoteNotifications()
       }
     )
 
     alert.addAction(
-      UIAlertAction(title: Strings.Dismiss(), style: .Cancel, handler: nil)
+      UIAlertAction(title: PushNotificationDialog.titleForDismissal, style: .cancel, handler: { _ in
+        PushNotificationDialog.didDenyAccess(for: context)
+      })
     )
 
-    self.rootTabBarController?.presentViewController(alert, animated: true, completion: nil)
+    DispatchQueue.main.async {
+      if let viewController = notification.userInfo?[UserInfoKeys.viewController] as? UIViewController {
+        viewController.present(alert, animated: true, completion: nil)
+      } else {
+        self.rootTabBarController?.present(alert, animated: true, completion: nil)
+      }
+    }
   }
 
-  private func goToMessageThread(messageThread: MessageThread) {
+  private func goToLiveStream(project: Project,
+                              liveStreamEvent: LiveStreamEvent,
+                              refTag: RefTag?) {
+
+    let projectVc = ProjectPamphletViewController.configuredWith(projectOrParam: .left(project),
+                                                                 refTag: refTag)
+
+    let liveVc: UIViewController
+    if liveStreamEvent.startDate < AppEnvironment.current.dateType.init().date {
+      liveVc = LiveStreamContainerViewController.configuredWith(project: project,
+                                                                liveStreamEvent: liveStreamEvent,
+                                                                refTag: .push,
+                                                                presentedFromProject: false)
+    } else {
+      liveVc = LiveStreamCountdownViewController.configuredWith(project: project,
+                                                                liveStreamEvent: liveStreamEvent,
+                                                                refTag: .push,
+                                                                presentedFromProject: false)
+    }
+
+    let nav = UINavigationController(navigationBarClass: ClearNavigationBar.self, toolbarClass: nil)
+    nav.viewControllers = [liveVc]
+
+    self.rootTabBarController?.present(projectVc, animated: true) {
+      projectVc.present(nav, animated: true)
+    }
+  }
+
+  private func goToMessageThread(_ messageThread: MessageThread) {
     self.rootTabBarController?.switchToMessageThread(messageThread)
+  }
+
+  private func goToCreatorMessageThread(_ projectId: Param, _ messageThread: MessageThread) {
+    self.rootTabBarController?
+      .switchToCreatorMessageThread(projectId: projectId, messageThread: messageThread)
+  }
+
+  private func goToProjectActivities(_ projectId: Param) {
+    self.rootTabBarController?.switchToProjectActivities(projectId: projectId)
+  }
+
+  private func findRedirectUrl(_ url: URL) {
+    let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+    let task = session.dataTask(with: url)
+    task.resume()
   }
 }
 
-extension AppDelegate : BITHockeyManagerDelegate {
-  func crashManagerDidFinishSendingCrashReport(crashManager: BITCrashManager!) {
+extension AppDelegate: BITHockeyManagerDelegate {
+  func crashManagerDidFinishSendingCrashReport(_ crashManager: BITCrashManager!) {
     self.viewModel.inputs.crashManagerDidFinishSendingCrashReport()
+  }
+}
+
+extension AppDelegate: URLSessionTaskDelegate {
+  public func urlSession(_ session: URLSession,
+                         task: URLSessionTask,
+                         willPerformHTTPRedirection response: HTTPURLResponse,
+                         newRequest request: URLRequest,
+                         completionHandler: @escaping (URLRequest?) -> Void) {
+    request.url.doIfSome(self.viewModel.inputs.foundRedirectUrl)
+    completionHandler(nil)
+  }
+}
+
+// MARK: - UNUserNotificationCenterDelegate
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+  public func userNotificationCenter(
+    _: UNUserNotificationCenter,
+    willPresent _: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+    completionHandler(.alert)
+  }
+
+  public func userNotificationCenter(
+    _: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completion: @escaping () -> Void
+    ) {
+    self.viewModel.inputs.didReceive(remoteNotification: response.notification.request.content.userInfo)
+    completion()
   }
 }

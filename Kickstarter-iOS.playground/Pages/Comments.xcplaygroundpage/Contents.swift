@@ -3,14 +3,14 @@ import Library
 import Prelude
 import Prelude_UIKit
 import UIKit
-import XCPlayground
+import PlaygroundSupport
 @testable import Kickstarter_Framework
 
 let backer = User.brando
 
 let creator = .template
-  |> User.lens.id .~ 808
-  |> User.lens.name .~ "Native Squad"
+  |> \.id .~ 808
+  |> \.name .~ "Native Squad"
 
 let project = .template
   |> Project.lens.creator .~ creator
@@ -25,7 +25,7 @@ let creatorComment = .template
   |> Comment.lens.body .~ "Thank you kindly for your feedback!"
 
 let deletedComment = .template
-  |> Comment.lens.author .~ (.template |> User.lens.name .~ "Naughty Blob")
+  |> Comment.lens.author .~ (.template |> \.name .~ "Naughty Blob")
   |> Comment.lens.body .~ "This comment has been deleted by Kickstarter."
   |> Comment.lens.deletedAt .~ NSDate().timeIntervalSince1970
 
@@ -38,8 +38,8 @@ AppEnvironment.replaceCurrentEnvironment(
   ),
   currentUser: backer,
   language: .en,
-  locale: NSLocale(localeIdentifier: "en"),
-  mainBundle: NSBundle.framework
+  locale: Locale(identifier: "en"),
+  mainBundle: Bundle.framework
 )
 
 // Initialize the view controller.
@@ -49,5 +49,5 @@ let controller = CommentsViewController.configuredWith(project: project)
 let (parent, _) = playgroundControllers(device: .phone4inch, orientation: .portrait, child: controller)
 
 let frame = parent.view.frame
-XCPlaygroundPage.currentPage.liveView = parent
 parent.view.frame = frame
+PlaygroundPage.current.liveView = parent

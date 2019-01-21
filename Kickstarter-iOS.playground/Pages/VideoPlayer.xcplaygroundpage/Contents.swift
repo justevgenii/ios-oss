@@ -3,24 +3,23 @@ import Library
 import Prelude
 import Prelude_UIKit
 import UIKit
-import XCPlayground
+import PlaygroundSupport
 @testable import Kickstarter_Framework
 
-XCPlaygroundPage.currentPage.needsIndefiniteExecution = true
-
-let project = .template
+let project = .cosmicSurgery
   |> Project.lens.video .~ (
     .template
       |> Project.Video.lens.high .~ "https://d2pq0u4uni88oo.cloudfront.net/projects/1846844/video-562464-h264_high.mp4"
 )
 
 AppEnvironment.replaceCurrentEnvironment(
-  mainBundle: NSBundle.framework,
   apiService: MockService(
     oauthToken: OauthToken(token: "deadbeef")
-  )
+  ),
+  mainBundle: Bundle.framework
 )
 
 initialize()
 let controller = VideoViewController.configuredWith(project: project)
-XCPlaygroundPage.currentPage.liveView = controller
+
+PlaygroundPage.current.liveView = controller

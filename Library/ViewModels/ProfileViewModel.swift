@@ -1,13 +1,13 @@
 import Foundation
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import ReactiveExtensions
 import Result
 
 public protocol ProfileViewModelInputs {
   /// Call when a project cell is tapped.
-  func projectTapped(project: Project)
+  func projectTapped(_ project: Project)
 
   /// Call when pull-to-refresh is invoked.
   func refresh()
@@ -15,11 +15,14 @@ public protocol ProfileViewModelInputs {
   /// Call when settings is tapped.
   func settingsButtonTapped()
 
+  /// Call when the project navigator has transitioned to a new project with its index.
+  func transitionedToProject(at row: Int, outOf totalRows: Int)
+
   /// Call when the view will appear.
-  func viewWillAppear(animated: Bool)
+  func viewWillAppear(_ animated: Bool)
 
   /// Call when a new row is displayed.
-  func willDisplayRow(row: Int, outOf totalRows: Int)
+  func willDisplayRow(_ row: Int, outOf totalRows: Int)
 }
 
 public protocol ProfileViewModelOutputs {
@@ -37,6 +40,9 @@ public protocol ProfileViewModelOutputs {
 
   /// Emits when settings should be shown.
   var goToSettings: Signal<Void, NoError> { get }
+
+  /// Emits when should scroll to the collection view item position.
+  var scrollToProjectItem: Signal<Int, NoError> { get }
 
   /// Emits a boolean that determines if the non-backer empty state is visible.
   var showEmptyState: Signal<Bool, NoError> { get }
@@ -58,7 +64,10 @@ public final class ProfileViewModel: ProfileViewModelType, ProfileViewModelInput
           |> DiscoveryParams.lens.sort .~ .endingSoon
     )
 
-    let requestNextPageWhen = self.willDisplayRowProperty.signal.ignoreNil()
+    let requestNextPageWhen = Signal.merge(
+      self.willDisplayRowProperty.signal.skipNil(),
+      self.transitionedToProjectRowAndTotalProperty.signal.skipNil()
+      )
       .map { row, total in row >= total - 3 }
       .skipRepeats()
       .filter(isTrue)
@@ -79,7 +88,7 @@ public final class ProfileViewModel: ProfileViewModelType, ProfileViewModelInput
     self.user = viewWillAppearProperty.signal
       .switchMap { _ in
         AppEnvironment.current.apiService.fetchUserSelf()
-          .prefix(SignalProducer(values: [AppEnvironment.current.currentUser].compact()))
+          .prefix(SignalProducer([AppEnvironment.current.currentUser].compact()))
           .demoteErrors()
     }
 
@@ -88,35 +97,42 @@ public final class ProfileViewModel: ProfileViewModelType, ProfileViewModelInput
     self.goToSettings = settingsButtonTappedProperty.signal
 
     self.goToProject = self.backedProjects
-      .takePairWhen(self.projectTappedProperty.signal.ignoreNil())
+      .takePairWhen(self.projectTappedProperty.signal.skipNil())
       .map { projects, project in (project, projects, RefTag.profileBacked) }
 
+    self.scrollToProjectItem = self.transitionedToProjectRowAndTotalProperty.signal.skipNil().map(first)
+
     self.viewWillAppearProperty.signal.filter(isFalse)
-      .observeNext { _ in AppEnvironment.current.koala.trackProfileView() }
+      .observeValues { _ in AppEnvironment.current.koala.trackProfileView() }
   }
 
-  private let projectTappedProperty = MutableProperty<Project?>(nil)
-  public func projectTapped(project: Project) {
+  fileprivate let projectTappedProperty = MutableProperty<Project?>(nil)
+  public func projectTapped(_ project: Project) {
     projectTappedProperty.value = project
   }
 
-  private let refreshProperty = MutableProperty()
+  fileprivate let refreshProperty = MutableProperty(())
   public func refresh() {
     self.refreshProperty.value = ()
   }
 
-  private let settingsButtonTappedProperty = MutableProperty()
+  fileprivate let settingsButtonTappedProperty = MutableProperty(())
   public func settingsButtonTapped() {
     self.settingsButtonTappedProperty.value = ()
   }
 
-  private let viewWillAppearProperty = MutableProperty(false)
-  public func viewWillAppear(animated: Bool) {
+  private let transitionedToProjectRowAndTotalProperty = MutableProperty<(row: Int, total: Int)?>(nil)
+  public func transitionedToProject(at row: Int, outOf totalRows: Int) {
+    self.transitionedToProjectRowAndTotalProperty.value = (row, totalRows)
+  }
+
+  fileprivate let viewWillAppearProperty = MutableProperty(false)
+  public func viewWillAppear(_ animated: Bool) {
     self.viewWillAppearProperty.value = animated
   }
 
-  private let willDisplayRowProperty = MutableProperty<(row: Int, total: Int)?>(nil)
-  public func willDisplayRow(row: Int, outOf totalRows: Int) {
+  fileprivate let willDisplayRowProperty = MutableProperty<(row: Int, total: Int)?>(nil)
+  public func willDisplayRow(_ row: Int, outOf totalRows: Int) {
     self.willDisplayRowProperty.value = (row, totalRows)
   }
 
@@ -125,6 +141,7 @@ public final class ProfileViewModel: ProfileViewModelType, ProfileViewModelInput
   public let isRefreshing: Signal<Bool, NoError>
   public let goToProject: Signal<(Project, [Project], RefTag), NoError>
   public let goToSettings: Signal<Void, NoError>
+  public let scrollToProjectItem: Signal<Int, NoError>
   public let showEmptyState: Signal<Bool, NoError>
 
   public var inputs: ProfileViewModelInputs { return self }

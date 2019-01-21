@@ -1,0 +1,545 @@
+version: 2
+
+xcode_version: &xcode_version 10.0
+iphone_name: &iphone_name iPhone 8
+opentok_version: &opentok_version 2.10.2
+fabric_sdk_version: &fabric_sdk_version 3.10.5
+store_fabric_sdk_version: &store_fabric_sdk_version echo "$FABRIC_SDK_VERSION" > fabric_version.txt
+store_opentok_version: &store_opentok_version echo "$OPENTOK_VERSION" > opentok_version.txt
+
+base_job: &base_job
+  macos:
+    xcode: "10.1.0"
+  working_directory: ~/kickstarter
+  environment:
+    CIRCLE_ARTIFACTS: /tmp
+    BUNDLE_PATH: vendor/bundle
+    FL_OUTPUT_DIR: output
+    LC_ALL: en_US.UTF-8
+    LANG: en_US.UTF-8
+    FABRIC_SDK_VERSION: *fabric_sdk_version
+    OPENTOK_VERSION: *opentok_version
+    IPHONE_NAME: *iphone_name
+    XCODE_VERSION: *xcode_version
+
+jobs:
+  swiftlint-and-cache:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+
+      - checkout
+
+      - run:
+          name: Store Fabric SDK Version
+          command: *store_fabric_sdk_version
+
+      - run:
+          name: Store OpenTok Version
+          command: *store_opentok_version
+
+      - restore_cache:
+          keys:
+            - opentok-cache-{{ checksum "opentok_version.txt" }}
+
+      - restore_cache:
+          keys:
+            - fabric-cache-{{ checksum "fabric_version.txt" }}
+
+      - run:
+          name: Make bootstrap
+          command: make bootstrap
+
+      - save_cache:
+          key: source-v1-{{ .Branch }}-{{ .Revision }}
+          paths:
+            - ".git"
+
+      - save_cache:
+          key: opentok-cache-{{ checksum "opentok_version.txt" }}
+          paths:
+            - "Frameworks/OpenTok"
+
+      - save_cache:
+          key: fabric-cache-{{ checksum "fabric_version.txt" }}
+          paths:
+            - "Frameworks/Fabric"
+
+      - run:
+          name: SwiftLint
+          command: make lint
+
+      - store_artifacts:
+          path: /tmp/swiftlint-report.json
+
+  # Kickstarter tests
+  kickstarter-tests:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+
+      - checkout
+
+      - run:
+          name: Store Fabric SDK Version
+          command: *store_fabric_sdk_version
+
+      - run:
+          name: Store OpenTok Version
+          command: *store_opentok_version
+
+      - restore_cache:
+          keys:
+            - opentok-cache-{{ checksum "opentok_version.txt" }}
+
+      - restore_cache:
+          keys:
+            - fabric-cache-{{ checksum "fabric_version.txt" }}
+
+      - run:
+          name: Make bootstrap
+          command: make bootstrap
+
+      - run:
+          name: Kickstarter tests
+          command: PLATFORM=iOS make test
+
+      - store_artifacts:
+          path: /tmp/xcode_raw.log
+      - store_artifacts:
+          path: /tmp/FailureDiffs
+
+  # Library tests
+  library-tests:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+
+      - checkout
+
+      - run:
+          name: Store Fabric SDK Version
+          command: *store_fabric_sdk_version
+
+      - run:
+          name: Store OpenTok Version
+          command: *store_opentok_version
+
+      - restore_cache:
+          keys:
+            - opentok-cache-{{ checksum "opentok_version.txt" }}
+
+      - restore_cache:
+          keys:
+            - fabric-cache-{{ checksum "fabric_version.txt" }}
+
+      - run:
+          name: Make bootstrap
+          command: make bootstrap
+
+      - run:
+          name: Library tests
+          command: PLATFORM=iOS TARGET=Library make test
+
+      - store_artifacts:
+          path: /tmp/xcode_raw.log
+
+  # LiveStream tests
+  livestream-tests:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+
+      - checkout
+
+      - run:
+          name: Store Fabric SDK Version
+          command: *store_fabric_sdk_version
+
+      - run:
+          name: Store OpenTok Version
+          command: *store_opentok_version
+
+      - restore_cache:
+          keys:
+            - opentok-cache-{{ checksum "opentok_version.txt" }}
+
+      - restore_cache:
+          keys:
+            - fabric-cache-{{ checksum "fabric_version.txt" }}
+
+      - run:
+          name: Make bootstrap
+          command: make bootstrap
+
+      - run:
+          name: LiveStream tests
+          command: SCHEME=LiveStream make test
+
+      - store_artifacts:
+          path: /tmp/xcode_raw.log
+
+  # KsApi tests
+  ksapi-tests:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+
+      - checkout
+
+      - run:
+          name: Store Fabric SDK Version
+          command: *store_fabric_sdk_version
+
+      - run:
+          name: Store OpenTok Version
+          command: *store_opentok_version
+
+      - restore_cache:
+          keys:
+            - opentok-cache-{{ checksum "opentok_version.txt" }}
+
+      - restore_cache:
+          keys:
+            - fabric-cache-{{ checksum "fabric_version.txt" }}
+
+      - run:
+          name: Make bootstrap
+          command: make bootstrap
+
+      - run:
+          name: KsApi tests
+          command: SCHEME=KsApi make test
+
+      - store_artifacts:
+          path: /tmp/xcode_raw.log
+
+  deploy_alpha:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+      - checkout
+      - save_cache:
+          key: source-v1-{{ .Branch }}-{{ .Revision }}
+          paths:
+            - ".git"
+      - run:
+          name: Deploy Alpha
+          command: make alpha
+
+   # Hockey Alpha
+  alpha:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+
+      - checkout
+
+      - run:
+          name: Store Fabric SDK Version
+          command: *store_fabric_sdk_version
+
+      - run:
+          name: Store OpenTok Version
+          command: *store_opentok_version
+
+      - restore_cache:
+          keys:
+            - opentok-cache-{{ checksum "opentok_version.txt" }}
+
+      - restore_cache:
+          keys:
+            - fabric-cache-{{ checksum "fabric_version.txt" }}
+
+      - run:
+          name: Make bootstrap
+          command: make bootstrap
+
+      - restore_cache:
+          keys:
+            - v1-gems-{{ checksum "Gemfile.lock" }}
+      - run:
+          name: Bundle install
+          command: bundle check || bundle install
+          environment:
+            BUNDLE_JOBS: 4
+            BUNDLE_RETRY: 3
+      - save_cache:
+          key: v1-gems-{{ checksum "Gemfile.lock" }}
+          paths:
+            - vendor/bundle
+
+      - run:
+          name: Increment build number
+          command: agvtool new-version -all $(($(date +%s)/100))
+
+      - run:
+          name: Fastlane
+          command: bundle exec fastlane alpha_match_gym_hockey --verbose
+          no_output_timeout: "30m" # 30 minutes
+
+      - run:
+          name: Cleanup Temp Branch
+          command: make cleanup
+
+      - store_artifacts:
+          path: /tmp/xcode_raw.log
+
+      - store_artifacts:
+          path: output
+
+  # Hockey Beta
+  beta:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+
+      - checkout
+
+      - run:
+          name: Store Fabric SDK Version
+          command: *store_fabric_sdk_version
+
+      - run:
+          name: Store OpenTok Version
+          command: *store_opentok_version
+
+      - restore_cache:
+          keys:
+            - opentok-cache-{{ checksum "opentok_version.txt" }}
+
+      - restore_cache:
+          keys:
+            - fabric-cache-{{ checksum "fabric_version.txt" }}
+
+      - run:
+          name: Make bootstrap
+          command: make bootstrap
+
+      - restore_cache:
+          keys:
+            - v1-gems-{{ checksum "Gemfile.lock" }}
+      - run:
+          name: Bundle install
+          command: bundle check || bundle install
+          environment:
+            BUNDLE_JOBS: 4
+            BUNDLE_RETRY: 3
+      - save_cache:
+          key: v1-gems-{{ checksum "Gemfile.lock" }}
+          paths:
+            - vendor/bundle
+
+      - run:
+          name: Increment build number
+          command: agvtool new-version -all $(($(date +%s)/100))
+
+      - run:
+          name: Fastlane
+          command: bundle exec fastlane beta_match_gym_hockey --verbose
+          no_output_timeout: "30m" # 30 minutes
+
+      - store_artifacts:
+          path: /tmp/xcode_raw.log
+
+      - store_artifacts:
+          path: output
+
+  refresh_app_store_dsyms:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+
+      - checkout
+
+      - run:
+          name: Store Fabric SDK Version
+          command: *store_fabric_sdk_version
+
+      - run:
+          name: Store OpenTok Version
+          command: *store_opentok_version
+
+      - restore_cache:
+          keys:
+            - opentok-cache-{{ checksum "opentok_version.txt" }}
+
+      - restore_cache:
+          keys:
+            - fabric-cache-{{ checksum "fabric_version.txt" }}
+
+      - run:
+          name: Make bootstrap
+          command: make bootstrap
+
+      - restore_cache:
+          keys:
+            - v1-gems-{{ checksum "Gemfile.lock" }}
+      - run:
+          name: Bundle install
+          command: bundle check || bundle install
+          environment:
+            BUNDLE_JOBS: 4
+            BUNDLE_RETRY: 3
+      - save_cache:
+          key: v1-gems-{{ checksum "Gemfile.lock" }}
+          paths:
+            - vendor/bundle
+      - run:
+          name: Download dSYMs and upload to Crashlytics
+          command: bundle exec fastlane refresh_dsyms
+
+  # iTunes
+  itunes:
+    <<: *base_job
+    steps:
+      - restore_cache:
+          keys:
+            - source-v1-{{ .Branch }}-{{ .Revision }}
+            - source-v1-{{ .Branch }}-
+            - source-v1-
+
+      - checkout
+
+      - run:
+          name: Store Fabric SDK Version
+          command: *store_fabric_sdk_version
+
+      - run:
+          name: Store OpenTok Version
+          command: *store_opentok_version
+
+      - restore_cache:
+          keys:
+            - opentok-cache-{{ checksum "opentok_version.txt" }}
+
+      - restore_cache:
+          keys:
+            - fabric-cache-{{ checksum "fabric_version.txt" }}
+
+      - run:
+          name: Make bootstrap
+          command: make bootstrap
+
+      - restore_cache:
+          keys:
+            - v1-gems-{{ checksum "Gemfile.lock" }}
+      - run:
+          name: Bundle install
+          command: bundle check || bundle install
+          environment:
+            BUNDLE_JOBS: 4
+            BUNDLE_RETRY: 3
+      - save_cache:
+          key: v1-gems-{{ checksum "Gemfile.lock" }}
+          paths:
+            - vendor/bundle
+
+      - run:
+          name: Increment build number
+          command: agvtool new-version -all $(($(date +%s)/100))
+
+      - run:
+          name: Fastlane
+          command: bundle exec fastlane itunes_match_gym_deliver_hockey --verbose
+          no_output_timeout: "30m" # 30 minutes
+
+      - store_artifacts:
+          path: /tmp/xcode_raw.log
+
+      - store_artifacts:
+          path: output
+
+# Workflows
+workflows:
+  version: 2
+  build:
+    jobs:
+      - swiftlint-and-cache
+      - kickstarter-tests
+      - library-tests
+      - livestream-tests
+      - ksapi-tests
+      - refresh_app_store_dsyms:
+          filters:
+            branches:
+              only: /alpha-dist-.*/
+      - deploy_alpha:
+          filters:
+            branches:
+              only: master
+          requires:
+            - swiftlint-and-cache
+            - kickstarter-tests
+            - library-tests
+            - livestream-tests
+            - ksapi-tests
+      - alpha:
+          filters:
+            branches:
+              only: /alpha-dist-.*/
+      - beta:
+          filters:
+            branches:
+              only: beta-dist
+          requires:
+            - swiftlint-and-cache
+            - kickstarter-tests
+            - library-tests
+            - livestream-tests
+            - ksapi-tests
+      - itunes:
+          filters:
+            branches:
+              only: itunes-dist
+          requires:
+            - swiftlint-and-cache
+            - kickstarter-tests
+            - library-tests
+            - livestream-tests
+            - ksapi-tests
+
+experimental:
+  notify:
+    branches:
+      only:
+        - master
+        - /alpha-dist-.*/
+        - beta-dist
+        - itunes-dist

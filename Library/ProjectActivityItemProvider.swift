@@ -12,19 +12,30 @@ public final class ProjectActivityItemProvider: UIActivityItemProvider {
     self.project = project
   }
 
-  public override func activityViewController(activityViewController: UIActivityViewController,
-                                              itemForActivityType activityType: String) -> AnyObject? {
+  public override func activityViewController(
+    _ activityViewController: UIActivityViewController,
+    itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
     if let project = self.project {
-      if activityType == UIActivityTypeMail || activityType == UIActivityTypeMessage {
-        return project.name
-      } else if activityType == UIActivityTypePostToTwitter {
-        return Strings.project_checkout_share_twitter_via_kickstarter(project_or_update_title: project.name)
-      } else if activityType == UIActivityTypeCopyToPasteboard ||
-        activityType == UIActivityTypePostToFacebook {
+      if activityType == .mail || activityType == .message {
+        return formattedString(for: project)
+      } else if activityType == .postToTwitter {
+        return Strings.project_checkout_share_twitter_via_kickstarter(
+          project_or_update_title: formattedString(for: project)
+        )
+      } else if activityType == .copyToPasteboard || activityType == .postToFacebook {
         return project.urls.web.project
+      } else {
+        return formattedString(for: project)
       }
     }
     return self.activityViewControllerPlaceholderItem(activityViewController)
+  }
+
+  private func formattedString(for project: Project) -> String {
+    return """
+            \(project.name)\n
+            \(project.urls.web.project)
+           """
   }
 }
 #endif

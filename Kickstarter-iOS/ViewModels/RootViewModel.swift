@@ -1,7 +1,7 @@
 import Library
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import Result
 import UIKit
 
@@ -15,7 +15,7 @@ internal enum TabBarItem {
   case activity(index: Int)
   case dashboard(index: Int)
   case home(index: Int)
-  case profile(avatarUrl: NSURL?, index: Int)
+  case profile(avatarUrl: URL?, index: Int)
   case search(index: Int)
 }
 
@@ -23,8 +23,11 @@ internal protocol RootViewModelInputs {
   /// Call when the controller has received a user updated notification.
   func currentUserUpdated()
 
+  /// Call before selected tab bar index changes.
+  func shouldSelect(index: Int?)
+
   /// Call when selected tab bar index changes.
-  func didSelectIndex(index: Int)
+  func didSelect(index: Int)
 
   /// Call when we should switch to the activities tab.
   func switchToActivities()
@@ -33,7 +36,7 @@ internal protocol RootViewModelInputs {
   func switchToDashboard(project param: Param?)
 
   /// Call when we should switch to the discovery tab.
-  func switchToDiscovery(params params: DiscoveryParams?)
+  func switchToDiscovery(params: DiscoveryParams?)
 
   /// Call when we should switch to the login tab.
   func switchToLogin()
@@ -43,6 +46,9 @@ internal protocol RootViewModelInputs {
 
   /// Call when we should switch to the search tab.
   func switchToSearch()
+
+  /// Call when the a user locale preference has changed
+  func userLocalePreferencesChanged()
 
   /// Call when the controller has received a user session ended notification.
   func userSessionEnded()
@@ -82,7 +88,6 @@ internal protocol RootViewModelType {
 
 internal final class RootViewModel: RootViewModelType, RootViewModelInputs, RootViewModelOutputs {
 
-  // swiftlint:disable function_body_length
   internal init() {
     let currentUser = Signal.merge(
       self.viewDidLoadProperty.signal,
@@ -96,57 +101,54 @@ internal final class RootViewModel: RootViewModelType, RootViewModelInputs, Root
       .map { ($0 != nil, ($0?.stats.memberProjectsCount ?? 0) > 0) }
       .skipRepeats(==)
 
-    let standardViewControllers = self.viewDidLoadProperty.signal
-      .map { _ in
-        [
-          DiscoveryViewController.instantiate(),
-          ActivitiesViewController.instantiate(),
-          SearchViewController.instantiate()
-        ]
-      }
+    let standardViewControllers = self.viewDidLoadProperty.signal.map { generateStandardViewControllers() }
+    let personalizedViewControllers = userState.map { generatePersonalizedViewControllers(userState: $0) }
+      .map { $0.compact() }
 
-    let personalizedViewControllers = userState
-      .map { user in
-        [
-          user.isMember    ? DashboardViewController.instantiate() as UIViewController? : nil,
-          !user.isLoggedIn
-            ? LoginToutViewController.configuredWith(loginIntent: .generic) as UIViewController? : nil,
-          user.isLoggedIn  ? ProfileViewController.instantiate() as UIViewController? : nil
-        ]
+    let viewControllers = Signal.combineLatest(standardViewControllers, personalizedViewControllers).map(+)
+
+    let refreshedViewControllers = userState.takeWhen(self.userLocalePreferencesChangedProperty.signal)
+      .map { userState -> [UIViewController?] in
+        let standard = generateStandardViewControllers()
+        let personalized = generatePersonalizedViewControllers(userState: userState)
+
+        return [standard, personalized].flatMap { $0 }
       }
       .map { $0.compact() }
 
-    let viewControllers = combineLatest(standardViewControllers, personalizedViewControllers).map(+)
-
-    self.setViewControllers = viewControllers
-      .map { $0.map(UINavigationController.init(rootViewController:)) }
+    self.setViewControllers = Signal.merge(
+      viewControllers,
+      refreshedViewControllers
+    ).map {
+        $0.map(UINavigationController.init(rootViewController:))
+    }
 
     let loginState = userState.map { $0.isLoggedIn }
     let vcCount = self.setViewControllers.map { $0.count }
 
-    let switchToLogin = combineLatest(vcCount, loginState)
+    let switchToLogin = Signal.combineLatest(vcCount, loginState)
       .takeWhen(self.switchToLoginProperty.signal)
-      .filter { isFalse($1) }
+      .filter(second >>> isFalse)
       .map(first)
 
-    let switchToProfile = combineLatest(vcCount, loginState)
+    let switchToProfile = Signal.combineLatest(vcCount, loginState)
       .takeWhen(self.switchToProfileProperty.signal)
       .filter { isTrue($1) }
       .map(first)
 
     let discovery = viewControllers
-      .map(first(DiscoveryViewController))
-      .ignoreNil()
+      .map(first(DiscoveryViewController.self))
+      .skipNil()
 
-    self.filterDiscovery =
-      combineLatest(discovery, self.switchToDiscoveryProperty.signal.ignoreNil())
+    self.filterDiscovery = discovery
+      .takePairWhen(self.switchToDiscoveryProperty.signal.skipNil())
 
     let dashboard = viewControllers
-      .map(first(DashboardViewController))
-      .ignoreNil()
+      .map(first(DashboardViewController.self))
+      .skipNil()
 
     self.switchDashboardProject =
-      combineLatest(dashboard, self.switchToDashboardProperty.signal.ignoreNil(),
+      Signal.combineLatest(dashboard, self.switchToDashboardProperty.signal.skipNil(),
         loginState)
         .filter { _, _, loginState in
           isTrue(loginState)
@@ -156,8 +158,9 @@ internal final class RootViewModel: RootViewModelType, RootViewModelInputs, Root
     }
 
     self.selectedIndex =
-      combineLatest(
+      Signal.combineLatest(
         .merge(
+          self.viewDidLoadProperty.signal.mapConst(0),
           self.didSelectIndexProperty.signal,
           self.switchToActivitiesProperty.signal.mapConst(1),
           self.switchToDiscoveryProperty.signal.mapConst(0),
@@ -170,62 +173,85 @@ internal final class RootViewModel: RootViewModelType, RootViewModelInputs, Root
         self.viewDidLoadProperty.signal)
         .map { idx, vcs, _ in clamp(0, vcs.count - 1)(idx) }
 
-    let selectedTabAgain = self.selectedIndex.combinePrevious()
-      .map { prev, next -> Int? in prev == next ? next : nil }
-      .ignoreNil()
+    let shouldSelectIndex = self.shouldSelectIndexProperty.signal
+      .skipNil()
 
-    self.scrollToTop = self.setViewControllers
-      .takePairWhen(selectedTabAgain)
+    let selectedTabAgain = self.selectedIndex
+      .takePairWhen(shouldSelectIndex)
+      .filter { prev, next in prev == next }
+      .map { $1 }
+
+    self.scrollToTop = Signal.combineLatest(
+      self.setViewControllers,
+      selectedTabAgain
+      )
+      .filter { vcs, idx in idx < vcs.count }
       .map { vcs, idx in vcs[idx] }
+      .map(extractViewController)
+      .skipNil()
 
-    self.tabBarItemsData = combineLatest(currentUser, self.viewDidLoadProperty.signal)
+    self.tabBarItemsData = Signal.combineLatest(currentUser, .merge(
+      self.viewDidLoadProperty.signal,
+      self.userLocalePreferencesChangedProperty.signal.ignoreValues())
+      )
       .map(first)
       .map(tabData(forUser:))
   }
-  // swiftlint:enable function_body_length
 
-  private let currentUserUpdatedProperty = MutableProperty(())
+  fileprivate let currentUserUpdatedProperty = MutableProperty(())
   internal func currentUserUpdated() {
     self.currentUserUpdatedProperty.value = ()
   }
-  private let didSelectIndexProperty = MutableProperty(0)
-  internal func didSelectIndex(index: Int) {
+
+  fileprivate let shouldSelectIndexProperty = MutableProperty<Int?>(nil)
+  internal func shouldSelect(index: Int?) {
+    self.shouldSelectIndexProperty.value = index
+  }
+
+  fileprivate let didSelectIndexProperty = MutableProperty(0)
+  internal func didSelect(index: Int) {
     self.didSelectIndexProperty.value = index
   }
-  private let switchToActivitiesProperty = MutableProperty()
+  fileprivate let switchToActivitiesProperty = MutableProperty(())
   internal func switchToActivities() {
     self.switchToActivitiesProperty.value = ()
   }
-  private let switchToDashboardProperty = MutableProperty<Param?>(nil)
+  fileprivate let switchToDashboardProperty = MutableProperty<Param?>(nil)
   internal func switchToDashboard(project param: Param?) {
     self.switchToDashboardProperty.value = param
   }
-  private let switchToDiscoveryProperty = MutableProperty<DiscoveryParams?>(nil)
-  internal func switchToDiscovery(params params: DiscoveryParams?) {
+  fileprivate let switchToDiscoveryProperty = MutableProperty<DiscoveryParams?>(nil)
+  internal func switchToDiscovery(params: DiscoveryParams?) {
     self.switchToDiscoveryProperty.value = params
   }
-  private let switchToLoginProperty = MutableProperty()
+  fileprivate let switchToLoginProperty = MutableProperty(())
   internal func switchToLogin() {
     self.switchToLoginProperty.value = ()
   }
-  private let switchToProfileProperty = MutableProperty()
+  fileprivate let switchToProfileProperty = MutableProperty(())
   internal func switchToProfile() {
     self.switchToProfileProperty.value = ()
   }
-  private let switchToSearchProperty = MutableProperty()
+  fileprivate let switchToSearchProperty = MutableProperty(())
   internal func switchToSearch() {
     self.switchToSearchProperty.value = ()
   }
-  private let userSessionStartedProperty = MutableProperty<()>()
+
+  fileprivate let userLocalePreferencesChangedProperty = MutableProperty(())
+  internal func userLocalePreferencesChanged() {
+    self.userLocalePreferencesChangedProperty.value = ()
+  }
+
+  fileprivate let userSessionStartedProperty = MutableProperty(())
   internal func userSessionStarted() {
     self.userSessionStartedProperty.value = ()
   }
-  private let userSessionEndedProperty = MutableProperty<()>()
+  fileprivate let userSessionEndedProperty = MutableProperty(())
   internal func userSessionEnded() {
     self.userSessionEndedProperty.value = ()
   }
 
-  private let viewDidLoadProperty = MutableProperty<()>()
+  fileprivate let viewDidLoadProperty = MutableProperty(())
   internal func viewDidLoad() {
     self.viewDidLoadProperty.value = ()
   }
@@ -241,51 +267,82 @@ internal final class RootViewModel: RootViewModelType, RootViewModelInputs, Root
   internal var outputs: RootViewModelOutputs { return self }
 }
 
+private func generateStandardViewControllers() -> [UIViewController] {
+  return [
+    DiscoveryViewController.instantiate(),
+    ActivitiesViewController.instantiate(),
+    SearchViewController.instantiate()
+  ]
+}
+
+private func generatePersonalizedViewControllers(userState: (isMember: Bool, isLoggedIn: Bool))
+  -> [UIViewController?] {
+  let dashboardViewController: UIViewController? = userState.isMember
+    ? DashboardViewController.instantiate() : nil
+  let loginProfileViewController: UIViewController = userState.isLoggedIn
+    ? profileController() : LoginToutViewController.configuredWith(loginIntent: .generic)
+
+  return [dashboardViewController, loginProfileViewController]
+}
+
 private func tabData(forUser user: User?) -> TabBarItemsData {
   let isMember = (user?.stats.memberProjectsCount ?? 0) > 0
 
   let items: [TabBarItem] = isMember
     ? [.home(index: 0), .activity(index: 1), .search(index: 2), .dashboard(index: 3),
-       .profile(avatarUrl: (user?.avatar.small).flatMap(NSURL.init(string:)), index: 4)]
+       .profile(avatarUrl: (user?.avatar.small).flatMap(URL.init(string:)), index: 4)]
     : [.home(index: 0), .activity(index: 1), .search(index: 2),
-       .profile(avatarUrl: (user?.avatar.small).flatMap(NSURL.init(string:)), index: 3)]
+       .profile(avatarUrl: (user?.avatar.small).flatMap(URL.init(string:)), index: 3)]
 
   return TabBarItemsData(items: items,
                          isLoggedIn: user != nil,
                          isMember: isMember)
 }
 
-extension TabBarItemsData: Equatable {}
-func == (lhs: TabBarItemsData, rhs: TabBarItemsData) -> Bool {
-  return lhs.items == rhs.items &&
-         lhs.isLoggedIn == rhs.isLoggedIn &&
-         lhs.isMember == rhs.isMember
-}
-
-// swiftlint:disable cyclomatic_complexity
-extension TabBarItem: Equatable {}
-func == (lhs: TabBarItem, rhs: TabBarItem) -> Bool {
-  switch (lhs, rhs) {
-  case let (.activity(lhs), .activity(rhs)):
-    return lhs == rhs
-  case let (.dashboard(lhs), .dashboard(rhs)):
-    return lhs == rhs
-  case let (.home(lhs), .home(rhs)):
-    return lhs == rhs
-  case let (.profile(lhs), .profile(rhs)):
-    return lhs.avatarUrl == rhs.avatarUrl && lhs.index == rhs.index
-  case let (.search(lhs), .search(rhs)):
-    return lhs == rhs
-  default: return false
+extension TabBarItemsData: Equatable {
+  static func == (lhs: TabBarItemsData, rhs: TabBarItemsData) -> Bool {
+    return lhs.items == rhs.items
+      && lhs.isLoggedIn == rhs.isLoggedIn
+      && lhs.isMember == rhs.isMember
   }
 }
-// swiftlint:enable cyclomatic_complexity
 
-private func first<VC: UIViewController>(viewController: VC.Type) -> ([UIViewController]) -> VC? {
+extension TabBarItem: Equatable {
+  static func == (lhs: TabBarItem, rhs: TabBarItem) -> Bool {
+    switch (lhs, rhs) {
+    case let (.activity(lhs), .activity(rhs)):
+      return lhs == rhs
+    case let (.dashboard(lhs), .dashboard(rhs)):
+      return lhs == rhs
+    case let (.home(lhs), .home(rhs)):
+      return lhs == rhs
+    case let (.profile(lhs), .profile(rhs)):
+      return lhs.avatarUrl == rhs.avatarUrl && lhs.index == rhs.index
+    case let (.search(lhs), .search(rhs)):
+      return lhs == rhs
+    default: return false
+    }
+  }
+}
+
+private func first<VC: UIViewController>(_ viewController: VC.Type) -> ([UIViewController]) -> VC? {
 
   return { viewControllers in
     viewControllers
-      .indexOf { $0 is VC }
+      .index { $0 is VC }
       .flatMap { viewControllers[$0] as? VC }
+  }
+}
+
+private func profileController() -> UIViewController {
+
+  return BackerDashboardViewController.instantiate()
+}
+
+private func extractViewController(_ viewController: UIViewController) -> UIViewController? {
+  if let navigationController = viewController as? UINavigationController {
+    return navigationController.viewControllers.count == 1 ? navigationController.viewControllers.first : nil
+  } else {
+    return viewController
   }
 }

@@ -5,7 +5,8 @@ public struct LaunchedCountries {
 
   public init() {
     self.countries = [
-      .AT, .AU, .BE, .CA, .CH, .DE, .DK, .ES, .FR, .GB, .HK, .IE, .IT, .LU, .MX, .NL, .NO, .NZ, .SE, .SG, .US
+      .au, .at, .be, .ca, .ch, .de, .dk, .es, .fr, .gb, .hk, .ie, .it, .jp, .lu, .mx, .nl, .no, .nz, .se, .sg,
+      .us
     ]
   }
 
@@ -16,11 +17,9 @@ public struct LaunchedCountries {
 
    - returns: A boolean.
    */
-  public func currencyNeedsCode(currencySymbol: String) -> Bool {
-    for country in self.countries {
-      if country.currencySymbol == currencySymbol {
-        return country.trailingCode
-      }
+  public func currencyNeedsCode(_ currencySymbol: String) -> Bool {
+    for country in self.countries where country.currencySymbol == currencySymbol {
+      return country.trailingCode
     }
     return false
   }

@@ -1,11 +1,13 @@
 import KsApi
+import MessageUI
 import Library
+import Prelude
 import SafariServices
 
 internal final class ProjectUpdatesViewController: WebViewController {
-  private let viewModel: ProjectUpdatesViewModelType = ProjectUpdatesViewModel()
-
-  internal static func configuredWith(project project: Project) -> ProjectUpdatesViewController {
+  fileprivate let viewModel: ProjectUpdatesViewModelType = ProjectUpdatesViewModel()
+  fileprivate let activityIndicator = UIActivityIndicatorView()
+  internal static func configuredWith(project: Project) -> ProjectUpdatesViewController {
     let vc = ProjectUpdatesViewController()
     vc.viewModel.inputs.configureWith(project: project)
     return vc
@@ -13,16 +15,28 @@ internal final class ProjectUpdatesViewController: WebViewController {
 
   internal override func viewDidLoad() {
     super.viewDidLoad()
+    self.viewModel.inputs.canSendEmail(MFMailComposeViewController.canSendMail())
+    self.activityIndicator.translatesAutoresizingMaskIntoConstraints = false
+    self.view.addSubview(self.activityIndicator)
+    NSLayoutConstraint.activate([
+      self.activityIndicator.centerXAnchor.constraint(equalTo: self.view.centerXAnchor),
+      self.activityIndicator.centerYAnchor.constraint(equalTo: self.view.centerYAnchor)
+    ])
     self.viewModel.inputs.viewDidLoad()
   }
 
-  internal override func viewWillAppear(animated: Bool) {
+  internal override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
     self.navigationController?.setNavigationBarHidden(false, animated: animated)
   }
 
   internal override func bindStyles() {
     super.bindStyles()
+
+    _ = self |> baseControllerStyle()
+    _ = self.activityIndicator
+      |> baseActivityIndicatorStyle
+      |> UIActivityIndicatorView.lens.animating .~ true
 
     self.navigationItem.title = Strings.project_menu_buttons_updates()
   }
@@ -32,48 +46,100 @@ internal final class ProjectUpdatesViewController: WebViewController {
 
     self.viewModel.outputs.goToSafariBrowser
       .observeForControllerAction()
-      .observeNext { [weak self] in self?.goToSafariBrowser(url: $0) }
+      .observeValues { [weak self] in
+        self?.goToSafariBrowser(url: $0)
+    }
+
+    self.viewModel.outputs.makePhoneCall
+      .observeForUI()
+      .observeValues { [weak self] number in
+        self?.call(number: number)
+    }
+
+    self.viewModel.outputs.showMailCompose
+      .observeForUI()
+      .observeValues { [weak self] recipient in
+        self?.openMailComposer(recipient: recipient)
+    }
+
+    self.viewModel.outputs.showNoEmailError
+      .observeForUI()
+      .observeValues { [weak self] alertController in
+        self?.present(alertController, animated: true)
+    }
 
     self.viewModel.outputs.goToUpdate
       .observeForControllerAction()
-      .observeNext { [weak self] in self?.goToUpdate(forProject: $0, update: $1) }
+      .observeValues { [weak self] in self?.goToUpdate(forProject: $0, update: $1) }
 
     self.viewModel.outputs.goToUpdateComments
       .observeForControllerAction()
-      .observeNext { [weak self] in self?.goToComments(forUpdate: $0) }
+      .observeValues { [weak self] in self?.goToComments(forUpdate: $0) }
 
     self.viewModel.outputs.webViewLoadRequest
       .observeForControllerAction()
-      .observeNext { [weak self] in self?.webView.loadRequest($0) }
+      .observeValues { [weak self] in _ = self?.webView.load($0) }
+
+    self.activityIndicator.rac.hidden = self.viewModel.outputs.isActivityIndicatorHidden
   }
 
-  private func goToComments(forUpdate update: Update) {
+  fileprivate func goToComments(forUpdate update: Update) {
     let vc = CommentsViewController.configuredWith(update: update)
-    if self.traitCollection.userInterfaceIdiom == .Pad {
+    if self.traitCollection.userInterfaceIdiom == .pad {
       let nav = UINavigationController(rootViewController: vc)
-      nav.modalPresentationStyle = UIModalPresentationStyle.FormSheet
-      self.presentViewController(nav, animated: true, completion: nil)
+      nav.modalPresentationStyle = UIModalPresentationStyle.formSheet
+      self.present(nav, animated: true, completion: nil)
     } else {
       self.navigationController?.pushViewController(vc, animated: true)
     }
   }
 
-  private func goToSafariBrowser(url url: NSURL) {
-    let controller = SFSafariViewController(URL: url)
-    controller.modalPresentationStyle = .OverFullScreen
-    self.presentViewController(controller, animated: true, completion: nil)
+  fileprivate func goToSafariBrowser(url: URL) {
+    let controller = SFSafariViewController(url: url)
+    controller.modalPresentationStyle = .overFullScreen
+    self.present(controller, animated: true, completion: nil)
   }
 
-  private func goToUpdate(forProject project: Project, update: Update) {
-    let vc = UpdateViewController.configuredWith(project: project, update: update)
+  fileprivate func goToUpdate(forProject project: Project, update: Update) {
+    let vc = UpdateViewController.configuredWith(project: project, update: update, context: .updates)
     self.navigationController?.pushViewController(vc, animated: true)
   }
 
-  internal func webView(webView: WKWebView,
-                        decidePolicyForNavigationAction navigationAction: WKNavigationAction,
-                                                        decisionHandler: (WKNavigationActionPolicy) -> Void) {
+  fileprivate func openMailComposer(recipient: String) {
+    guard MFMailComposeViewController.canSendMail() else { return }
+
+    let controller = MFMailComposeViewController()
+    controller.setToRecipients([recipient])
+    controller.mailComposeDelegate = self
+    self.present(controller, animated: true, completion: nil)
+  }
+
+  fileprivate func call(number url: URL) {
+    UIApplication.shared.open(url)
+  }
+
+  internal func webView(_ webView: WKWebView,
+                        decidePolicyFor navigationAction: WKNavigationAction,
+                        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
     decisionHandler(
-      self.viewModel.inputs.decidePolicy(forNavigationAction: .init(navigationAction: navigationAction))
-    )
+      self.viewModel.inputs.decidePolicy(forNavigationAction: .init(navigationAction: navigationAction)
+    ))
+  }
+
+  func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+    self.viewModel.inputs.webViewDidStartProvisionalNavigation()
+  }
+
+  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+    self.viewModel.inputs.webViewDidFinishNavigation()
+  }
+}
+
+extension ProjectUpdatesViewController: MFMailComposeViewControllerDelegate {
+  internal func mailComposeController(_ controller: MFMailComposeViewController,
+                                      didFinishWith result: MFMailComposeResult,
+                                      error: Error?) {
+    self.viewModel.inputs.mailComposeCompletion(result: result)
+    controller.dismiss(animated: true, completion: nil)
   }
 }

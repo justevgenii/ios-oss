@@ -1,7 +1,7 @@
 import AVFoundation
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import ReactiveExtensions
 import Result
 
@@ -10,7 +10,7 @@ private let pauseRate = 0.0
 
 public protocol VideoViewModelInputs {
   /// Call to configure cell with project value.
-  func configureWith(project project: Project)
+  func configureWith(project: Project)
 
   /// Call when the video playback crosses the completion threshold.
   func crossedCompletionThreshold()
@@ -28,7 +28,7 @@ public protocol VideoViewModelInputs {
   func viewDidAppear()
 
   /// Call when the view did disappear.
-  func viewDidDisappear(animated animated: Bool)
+  func viewDidDisappear(animated: Bool)
 
   /// Call when the view did load.
   func viewDidLoad()
@@ -42,7 +42,7 @@ public protocol VideoViewModelOutputs {
   var addCompletionObserver: Signal<CMTime, NoError> { get }
 
   /// Emits with the video url to be played.
-  var configurePlayerWithURL: Signal<NSURL, NoError> { get }
+  var configurePlayerWithURL: Signal<URL, NoError> { get }
 
   /// Emits for testing when the video complete stat is incremented.
   var incrementVideoCompletion: Signal<VoidEnvelope, NoError> { get }
@@ -52,6 +52,9 @@ public protocol VideoViewModelOutputs {
 
   var notifyDelegateThatVideoDidFinish: Signal<(), NoError> { get }
   var notifyDelegateThatVideoDidStart: Signal<(), NoError> { get }
+
+  /// Emits alpha value for play button and video overlay for transitioning.
+  var opacityForViews: Signal<CGFloat, NoError> { get }
 
   /// Emits when the video should be paused.
   var pauseVideo: Signal<Void, NoError> { get }
@@ -66,13 +69,10 @@ public protocol VideoViewModelOutputs {
   var projectImageHidden: Signal<Bool, NoError> { get }
 
   /// Emits with the project image url to be displayed.
-  var projectImageURL: Signal<NSURL?, NoError> { get }
+  var projectImageURL: Signal<URL?, NoError> { get }
 
   /// Emits when should seek video back to beginning.
   var seekToBeginning: Signal<Void, NoError> { get }
-
-  /// Emits a boolean to determine whether or not the video overlay should be hidden.
-  var videoOverlayViewHidden: Signal<Bool, NoError> { get }
 
   /// Emits a boolean to determine whether or not the video player should be hidden.
   var videoViewHidden: Signal<Bool, NoError> { get }
@@ -85,11 +85,10 @@ public protocol VideoViewModelType {
 
 public final class VideoViewModel: VideoViewModelInputs, VideoViewModelOutputs, VideoViewModelType {
 
-  // swiftlint:disable function_body_length
-  public init() {
+    public init() {
 
-    let project = combineLatest(
-      self.projectProperty.signal.ignoreNil(),
+    let project = Signal.combineLatest(
+      self.projectProperty.signal.skipNil(),
       self.viewDidLoadProperty.signal
     )
     .map(first)
@@ -99,44 +98,44 @@ public final class VideoViewModel: VideoViewModelInputs, VideoViewModelOutputs, 
       self.viewWillDisappearProperty.signal.mapConst(false)
     )
 
-    let duration = self.durationProperty.signal.ignoreNil().skipRepeats()
-    let rateCurrentTime = self.rateCurrentTimeProperty.signal.ignoreNil().skipRepeats(==)
+    let duration = self.durationProperty.signal.skipNil().skipRepeats()
+    let rateCurrentTime = self.rateCurrentTimeProperty.signal.skipNil().skipRepeats(==)
 
     let completionThreshold = duration
       .map { 0.85 * CMTimeGetSeconds($0) }
 
-    let reachedEndOfVideo = combineLatest(rateCurrentTime, duration)
+    let reachedEndOfVideo = Signal.combineLatest(rateCurrentTime, duration)
       .filter { rateCurrentTime, duration in rateCurrentTime.1 == duration }
 
-    let videoCompletedOnScrub = combineLatest(rateCurrentTime, completionThreshold)
+    let videoCompletedOnScrub = Signal.combineLatest(rateCurrentTime, completionThreshold)
       .filter { rateCurrentTime, completionThreshold in
         let currentTimeSeconds = CMTimeGetSeconds(rateCurrentTime.1)
         return currentTimeSeconds >= completionThreshold
       }
-      .take(1)
+      .take(first: 1)
       .ignoreValues()
 
     let videoCompleted = Signal.merge(videoCompletedOnScrub, self.crossedCompletionThresholdProperty.signal)
-      .take(1)
+      .take(first: 1)
 
-    let videoPaused = combineLatest(rateCurrentTime, duration)
-      .skip(1)
+    let videoPaused = Signal.combineLatest(rateCurrentTime, duration)
+      .skip(first: 1)
       .filter { rateCurrentTime, duration in rateCurrentTime.0 == pauseRate && rateCurrentTime.1 != duration }
 
     let videoResumed = rateCurrentTime
-      .filter { rate, currentTime in currentTime > kCMTimeZero && rate == playRate }
+      .filter { rate, currentTime in currentTime > CMTime.zero && rate == playRate }
 
     let videoStarted = rateCurrentTime
-      .filter { rate, currentTime in currentTime == kCMTimeZero && rate == playRate }
-      .take(1)
+      .filter { rate, currentTime in currentTime == CMTime.zero && rate == playRate }
+      .take(first: 1)
 
-    self.addCompletionObserver = completionThreshold.map { CMTimeMakeWithSeconds($0, 1) }
+    self.addCompletionObserver = completionThreshold.map { CMTimeMakeWithSeconds($0, preferredTimescale: 1) }
 
     self.configurePlayerWithURL = project
       .filter { $0.video != nil }
       .takeWhen(self.playButtonTappedProperty.signal)
-      .map { NSURL(string: $0.video?.high ?? "") }
-      .ignoreNil()
+      .map { URL(string: $0.video?.hls ?? $0.video?.high ?? "") }
+      .skipNil()
       .skipRepeats()
 
     self.playVideo = self.playButtonTappedProperty.signal
@@ -153,104 +152,111 @@ public final class VideoViewModel: VideoViewModelInputs, VideoViewModelOutputs, 
     self.projectImageHidden = Signal.merge(elementsHiddenOnPlayback, project.mapConst(false))
       .skipRepeats()
 
-    self.playButtonHidden = Signal.merge(project.map { $0.video == nil }, elementsHiddenOnPlayback)
+    self.playButtonHidden = Signal.merge(
+      project.map { $0.video == nil },
+      elementsHiddenOnPlayback
+      )
       .skipRepeats()
 
-    self.projectImageURL = project.map { NSURL(string: $0.photo.full) }.skipRepeats(==)
+    self.projectImageURL = project.map { URL(string: $0.photo.full) }.skipRepeats(==)
 
     self.seekToBeginning = reachedEndOfVideo.ignoreValues()
 
-    self.incrementVideoCompletion = combineLatest(project, videoCompleted)
+    self.incrementVideoCompletion = Signal.combineLatest(project, videoCompleted)
       .map(first)
       .switchMap {
         AppEnvironment.current.apiService.incrementVideoCompletion(forProject: $0)
           .demoteErrors()
     }
 
-    self.incrementVideoStart = combineLatest(project, videoStarted)
+    self.incrementVideoStart = Signal.combineLatest(project, videoStarted)
       .map(first)
       .switchMap {
         AppEnvironment.current.apiService.incrementVideoStart(forProject: $0)
           .demoteErrors()
       }
 
-    self.videoOverlayViewHidden = self.playButtonHidden
-
     self.videoViewHidden = self.projectImageHidden.map(negate)
 
     self.notifyDelegateThatVideoDidFinish = reachedEndOfVideo.ignoreValues()
     self.notifyDelegateThatVideoDidStart = self.playButtonTappedProperty.signal
 
+    self.opacityForViews = Signal.merge(
+      self.viewDidLoadProperty.signal.mapConst(0.0),
+      self.playButtonHidden.filter(isFalse)
+        .takeWhen(self.viewDidAppearProperty.signal)
+        .mapConst(1.0)
+    )
+
     project
       .takeWhen(videoCompleted)
-      .observeNext { AppEnvironment.current.koala.trackVideoCompleted(forProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackVideoCompleted(forProject: $0) }
 
-    combineLatest(project, viewIsVisible)
+    Signal.combineLatest(project, viewIsVisible)
       .takeWhen(videoPaused)
       .filter { _, isVisible in isVisible }
       .map(first)
-      .observeNext { AppEnvironment.current.koala.trackVideoPaused(forProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackVideoPaused(forProject: $0) }
 
     project
       .takeWhen(videoResumed)
-      .observeNext { AppEnvironment.current.koala.trackVideoResume(forProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackVideoResume(forProject: $0) }
 
     project
       .takeWhen(videoStarted)
-      .observeNext { AppEnvironment.current.koala.trackVideoStart(forProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackVideoStart(forProject: $0) }
   }
-  // swiftlint:enable function_body_length
 
-  private let crossedCompletionThresholdProperty = MutableProperty()
+  fileprivate let crossedCompletionThresholdProperty = MutableProperty(())
   public func crossedCompletionThreshold() {
     self.crossedCompletionThresholdProperty.value = ()
   }
-  private let durationProperty = MutableProperty<CMTime?>(nil)
+  fileprivate let durationProperty = MutableProperty<CMTime?>(nil)
   public func durationChanged(toNew duration: CMTime) {
     self.durationProperty.value = duration
   }
-  private let playButtonTappedProperty = MutableProperty()
+  fileprivate let playButtonTappedProperty = MutableProperty(())
   public func playButtonTapped() {
     self.playButtonTappedProperty.value = ()
   }
-  private let projectProperty = MutableProperty<Project?>(nil)
-  public func configureWith(project project: Project) {
+  fileprivate let projectProperty = MutableProperty<Project?>(nil)
+  public func configureWith(project: Project) {
     self.projectProperty.value = project
   }
-  private let rateCurrentTimeProperty = MutableProperty<(Double, CMTime)?>(nil)
+  fileprivate let rateCurrentTimeProperty = MutableProperty<(Double, CMTime)?>(nil)
   public func rateChanged(toNew rate: Double, atTime currentTime: CMTime) {
     self.rateCurrentTimeProperty.value = (rate, currentTime)
   }
-  private let viewDidAppearProperty = MutableProperty()
+  fileprivate let viewDidAppearProperty = MutableProperty(())
   public func viewDidAppear() {
     self.viewDidAppearProperty.value = ()
   }
-  private let viewDidDisappearProperty = MutableProperty(false)
-  public func viewDidDisappear(animated animated: Bool) {
+  fileprivate let viewDidDisappearProperty = MutableProperty(false)
+  public func viewDidDisappear(animated: Bool) {
     self.viewDidDisappearProperty.value = animated
   }
-  private let viewDidLoadProperty = MutableProperty()
+  fileprivate let viewDidLoadProperty = MutableProperty(())
   public func viewDidLoad() {
     self.viewDidLoadProperty.value = ()
   }
-  private let viewWillDisappearProperty = MutableProperty()
+  fileprivate let viewWillDisappearProperty = MutableProperty(())
   public func viewWillDisappear() {
     self.viewWillDisappearProperty.value = ()
   }
 
   public let addCompletionObserver: Signal<CMTime, NoError>
-  public let configurePlayerWithURL: Signal<NSURL, NoError>
+  public let configurePlayerWithURL: Signal<URL, NoError>
   public let incrementVideoCompletion: Signal<VoidEnvelope, NoError>
   public let incrementVideoStart: Signal<VoidEnvelope, NoError>
   public let notifyDelegateThatVideoDidFinish: Signal<(), NoError>
   public let notifyDelegateThatVideoDidStart: Signal<(), NoError>
+  public let opacityForViews: Signal<CGFloat, NoError>
   public let pauseVideo: Signal<Void, NoError>
   public let playVideo: Signal<Void, NoError>
   public var playButtonHidden: Signal<Bool, NoError>
   public var projectImageHidden: Signal<Bool, NoError>
-  public let projectImageURL: Signal<NSURL?, NoError>
+  public let projectImageURL: Signal<URL?, NoError>
   public let seekToBeginning: Signal<Void, NoError>
-  public var videoOverlayViewHidden: Signal<Bool, NoError>
   public var videoViewHidden: Signal<Bool, NoError>
 
   public var inputs: VideoViewModelInputs { return self }

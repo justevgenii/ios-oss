@@ -1,14 +1,15 @@
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import Result
 
 public protocol MessageThreadsViewModelInputs {
   /// Call when the mailbox chooser button is pressed.
   func mailboxButtonPressed()
 
-  /// Call with the project whose message threads we are viewing. If no project is given, then use `nil`.
-  func configureWith(project project: Project?)
+  /// Call with the project whose message threads we are viewing. If no project or refTag is given, then use
+  /// `nil`.
+  func configureWith(project: Project?, refTag: RefTag?)
 
   /// Call when pull-to-refresh is invoked.
   func refresh()
@@ -17,13 +18,13 @@ public protocol MessageThreadsViewModelInputs {
   func searchButtonPressed()
 
   /// Call when the user has selected a mailbox to switch to.
-  func switchTo(mailbox mailbox: Mailbox)
+  func switchTo(mailbox: Mailbox)
 
   /// Call when the view loads.
   func viewDidLoad()
 
   /// Call when a new row is displayed.
-  func willDisplayRow(row: Int, outOf totalRows: Int)
+  func willDisplayRow(_ row: Int, outOf totalRows: Int)
 }
 
 public protocol MessageThreadsViewModelOutputs {
@@ -57,19 +58,24 @@ public protocol MessageThreadsViewModelType {
 public final class MessageThreadsViewModel: MessageThreadsViewModelType, MessageThreadsViewModelInputs,
 MessageThreadsViewModelOutputs {
 
-  // swiftlint:disable function_body_length
-  public init() {
-    let isCloseToBottom = self.willDisplayRowProperty.signal.ignoreNil()
-      .filter { row, total in total > 1 }
+    public init() {
+    let isCloseToBottom = self.willDisplayRowProperty.signal.skipNil()
+      .filter { _, total in total > 1 }
       .map { row, total in row >= total - 3 }
       .skipRepeats()
       .filter { isClose in isClose }
       .ignoreValues()
 
     let mailbox = Signal.merge(
-      self.switchToMailbox.signal.ignoreNil(),
+      self.switchToMailbox.signal.skipNil(),
       self.viewDidLoadProperty.signal.mapConst(.inbox)
     )
+
+    let configData = Signal.combineLatest(
+      self.configDataProperty.signal.skipNil(),
+      mailbox
+    )
+    .map(first)
 
     let requestFirstPageWith = Signal.merge(
       mailbox,
@@ -82,9 +88,9 @@ MessageThreadsViewModelOutputs {
       clearOnNewRequest: true,
       valuesFromEnvelope: { $0.messageThreads },
       cursorFromEnvelope: { $0.urls.api.moreMessageThreads },
-      requestFromParams: { [project = projectProperty.producer] mailbox in
-        project.take(1)
-          .promoteErrors(ErrorEnvelope.self)
+      requestFromParams: { [project = configDataProperty.producer.map { $0?.project }] mailbox in
+        project.take(first: 1)
+          .promoteError(ErrorEnvelope.self)
           .flatMap { project in
             AppEnvironment.current.apiService.fetchMessageThreads(mailbox: mailbox, project: project)
         }
@@ -110,7 +116,7 @@ MessageThreadsViewModelOutputs {
     ).skipRepeats()
 
     self.loadingFooterIsHidden = Signal.merge([
-      self.viewDidLoadProperty.signal.take(1).mapConst(false),
+      self.viewDidLoadProperty.signal.take(first: 1).mapConst(false),
       isCloseToBottom.mapConst(false),
       mailbox.mapConst(false),
       isLoading.filter(isFalse).mapConst(true),
@@ -120,40 +126,43 @@ MessageThreadsViewModelOutputs {
 
     self.goToSearch = self.searchButtonPressedProperty.signal
 
-    self.projectProperty.producer
+    configData
       .takePairWhen(mailbox)
-      .observeNext { project, mailbox in
-        AppEnvironment.current.koala.trackMessageThreadsView(mailbox: mailbox, project: project)
-    }
+      .observeValues { configData, mailbox in
+        AppEnvironment.current.koala.trackMessageThreadsView(mailbox: mailbox,
+                                                             project: configData.project,
+                                                             refTag: configData.refTag ?? .unrecognized(""))
+
+      }
   }
   // swiftlint:enable function_body_length
 
-  private let mailboxButtonPressedProperty = MutableProperty()
+  fileprivate let mailboxButtonPressedProperty = MutableProperty(())
   public func mailboxButtonPressed() {
     self.mailboxButtonPressedProperty.value = ()
   }
-  private let projectProperty = MutableProperty<Project?>(nil)
-  public func configureWith(project project: Project?) {
-    self.projectProperty.value = project
+  fileprivate let configDataProperty = MutableProperty<ConfigData?>(nil)
+  public func configureWith(project: Project?, refTag: RefTag?) {
+    self.configDataProperty.value = ConfigData(project: project, refTag: refTag)
   }
-  private let refreshProperty = MutableProperty()
+  fileprivate let refreshProperty = MutableProperty(())
   public func refresh() {
     self.refreshProperty.value = ()
   }
-  private let searchButtonPressedProperty = MutableProperty()
+  fileprivate let searchButtonPressedProperty = MutableProperty(())
   public func searchButtonPressed() {
     self.searchButtonPressedProperty.value = ()
   }
-  private let switchToMailbox = MutableProperty<Mailbox?>(nil)
-  public func switchTo(mailbox mailbox: Mailbox) {
+  fileprivate let switchToMailbox = MutableProperty<Mailbox?>(nil)
+  public func switchTo(mailbox: Mailbox) {
     self.switchToMailbox.value = mailbox
   }
-  private let viewDidLoadProperty = MutableProperty()
+  fileprivate let viewDidLoadProperty = MutableProperty(())
   public func viewDidLoad() {
     self.viewDidLoadProperty.value = ()
   }
-  private let willDisplayRowProperty = MutableProperty<(row: Int, total: Int)?>(nil)
-  public func willDisplayRow(row: Int, outOf totalRows: Int) {
+  fileprivate let willDisplayRowProperty = MutableProperty<(row: Int, total: Int)?>(nil)
+  public func willDisplayRow(_ row: Int, outOf totalRows: Int) {
     self.willDisplayRowProperty.value = (row, totalRows)
   }
 
@@ -167,4 +176,9 @@ MessageThreadsViewModelOutputs {
 
   public var inputs: MessageThreadsViewModelInputs { return self }
   public var outputs: MessageThreadsViewModelOutputs { return self }
+}
+
+private struct ConfigData {
+  fileprivate let project: Project?
+  fileprivate let refTag: RefTag?
 }

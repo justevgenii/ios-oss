@@ -3,88 +3,125 @@ import Library
 import Prelude
 import UIKit
 
-internal protocol ProjectPamphletViewControllerDelegate: class {
-  func projectPamphlet(controller: ProjectPamphletViewController,
+public protocol ProjectPamphletViewControllerDelegate: class {
+  func projectPamphlet(_ controller: ProjectPamphletViewController,
                        panGestureRecognizerDidChange recognizer: UIPanGestureRecognizer)
 }
 
-internal final class ProjectPamphletViewController: UIViewController {
+public final class ProjectPamphletViewController: UIViewController {
   internal weak var delegate: ProjectPamphletViewControllerDelegate?
-  private let viewModel: ProjectPamphletViewModelType = ProjectPamphletViewModel()
+  fileprivate let viewModel: ProjectPamphletViewModelType = ProjectPamphletViewModel()
 
-  private var navBarController: ProjectNavBarViewController!
-  private var contentController: ProjectPamphletContentViewController!
+  fileprivate var navBarController: ProjectNavBarViewController!
+  fileprivate var contentController: ProjectPamphletContentViewController!
 
-  internal static func configuredWith(projectOrParam projectOrParam: Either<Project, Param>, refTag: RefTag?)
-    -> ProjectPamphletViewController {
+  @IBOutlet weak private var navBarTopConstraint: NSLayoutConstraint!
 
-      let vc = Storyboard.ProjectPamphlet.instantiate(ProjectPamphletViewController)
-      vc.viewModel.inputs.configureWith(projectOrParam: projectOrParam, refTag: refTag)
-      return vc
+  public static func configuredWith(projectOrParam: Either<Project, Param>,
+                                    refTag: RefTag?) -> ProjectPamphletViewController {
+
+    let vc = Storyboard.ProjectPamphlet.instantiate(ProjectPamphletViewController.self)
+    vc.viewModel.inputs.configureWith(projectOrParam: projectOrParam, refTag: refTag)
+    return vc
   }
 
-  internal override func prefersStatusBarHidden() -> Bool {
-    return self.viewModel.outputs.prefersStatusBarHidden
+  public override var prefersStatusBarHidden: Bool {
+    return UIApplication.shared.statusBarOrientation.isLandscape
   }
 
-  internal override func preferredStatusBarUpdateAnimation() -> UIStatusBarAnimation {
-    return .Fade
-  }
-
-  internal override func viewDidLoad() {
+  public override func viewDidLoad() {
     super.viewDidLoad()
 
-    self.navBarController = self.childViewControllers
-      .flatMap { $0 as? ProjectNavBarViewController }.first
+    self.navBarController = self.children
+      .compactMap { $0 as? ProjectNavBarViewController }.first
     self.navBarController.delegate = self
 
-    self.contentController = self.childViewControllers
-      .flatMap { $0 as? ProjectPamphletContentViewController }.first
+    self.contentController = self.children
+      .compactMap { $0 as? ProjectPamphletContentViewController }.first
     self.contentController.delegate = self
+
+    self.viewModel.inputs.initial(topConstraint: initialTopConstraint)
 
     self.viewModel.inputs.viewDidLoad()
   }
 
-  internal override func viewWillAppear(animated: Bool) {
+  public override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
     self.viewModel.inputs.viewWillAppear(animated: animated)
   }
 
-  internal override func viewDidAppear(animated: Bool) {
+  public override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    self.setInitial(constraints: [navBarTopConstraint],
+                    constant: initialTopConstraint)
+  }
+
+  public override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     self.viewModel.inputs.viewDidAppear(animated: animated)
   }
 
-  internal override func bindViewModel() {
+  private var initialTopConstraint: CGFloat {
+    if #available(iOS 11.0, *) {
+      return parent?.view.safeAreaInsets.top ?? 0.0
+    } else {
+      return UIApplication.shared.statusBarFrame.size.height
+    }
+  }
+
+  public override func bindViewModel() {
     super.bindViewModel()
 
-    self.viewModel.outputs.configureChildViewControllersWithProject
+    self.viewModel.outputs.configureChildViewControllersWithProjectAndLiveStreams
       .observeForUI()
-      .observeNext { [weak self] project, refTag in
-        self?.contentController.configureWith(project: project)
+      .observeValues { [weak self] project, liveStreamEvents, refTag in
+        self?.contentController.configureWith(project: project, liveStreamEvents: liveStreamEvents)
         self?.navBarController.configureWith(project: project, refTag: refTag)
     }
 
     self.viewModel.outputs.setNavigationBarHiddenAnimated
       .observeForUI()
-      .observeNext { [weak self] in self?.navigationController?.setNavigationBarHidden($0, animated: $1) }
+      .observeValues { [weak self] in self?.navigationController?.setNavigationBarHidden($0, animated: $1) }
 
     self.viewModel.outputs.setNeedsStatusBarAppearanceUpdate
       .observeForUI()
-      .observeNext { [weak self] in
-        UIView.animateWithDuration(0.3) { self?.setNeedsStatusBarAppearanceUpdate() }
+      .observeValues { [weak self] in
+        UIView.animate(withDuration: 0.3) { self?.setNeedsStatusBarAppearanceUpdate() }
+    }
+
+    self.viewModel.outputs.topLayoutConstraintConstant
+      .observeForUI()
+      .observeValues { [weak self] value in
+        self?.navBarTopConstraint.constant = value
+    }
+  }
+
+  public override func willTransition(to newCollection: UITraitCollection,
+                                      with coordinator: UIViewControllerTransitionCoordinator) {
+    self.viewModel.inputs.willTransition(toNewCollection: newCollection)
+  }
+
+  private func setInitial(constraints: [NSLayoutConstraint?], constant: CGFloat) {
+
+    constraints.forEach {
+      $0?.constant = constant
     }
   }
 }
 
 extension ProjectPamphletViewController: ProjectPamphletContentViewControllerDelegate {
-  internal func projectPamphletContent(controller: ProjectPamphletContentViewController,
-                                       imageIsVisible: Bool) {
+  public func projectPamphletContent(_ controller: ProjectPamphletContentViewController,
+                                     didScrollToTop: Bool) {
+    self.navBarController.setDidScrollToTop(didScrollToTop)
+  }
+
+  public func projectPamphletContent(_ controller: ProjectPamphletContentViewController,
+                                     imageIsVisible: Bool) {
     self.navBarController.setProjectImageIsVisible(imageIsVisible)
   }
 
-  internal func projectPamphletContent(
-    controller: ProjectPamphletContentViewController,
+  public func projectPamphletContent(
+    _ controller: ProjectPamphletContentViewController,
     scrollViewPanGestureRecognizerDidChange recognizer: UIPanGestureRecognizer) {
 
       self.delegate?.projectPamphlet(self, panGestureRecognizerDidChange: recognizer)
@@ -92,17 +129,17 @@ extension ProjectPamphletViewController: ProjectPamphletContentViewControllerDel
 }
 
 extension ProjectPamphletViewController: VideoViewControllerDelegate {
-  internal func videoViewControllerDidFinish(controller: VideoViewController) {
+  public func videoViewControllerDidFinish(_ controller: VideoViewController) {
     self.navBarController.projectVideoDidFinish()
   }
 
-  internal func videoViewControllerDidStart(controller: VideoViewController) {
+  public func videoViewControllerDidStart(_ controller: VideoViewController) {
     self.navBarController.projectVideoDidStart()
   }
 }
 
 extension ProjectPamphletViewController: ProjectNavBarViewControllerDelegate {
-  func projectNavBarControllerDidTapTitle(controller: ProjectNavBarViewController) {
+  public func projectNavBarControllerDidTapTitle(_ controller: ProjectNavBarViewController) {
     self.contentController.tableView.scrollToTop()
   }
 }

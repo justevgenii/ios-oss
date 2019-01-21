@@ -1,21 +1,24 @@
 import KsApi
-import ReactiveCocoa
+import Prelude
 import ReactiveExtensions
+import ReactiveSwift
 import Result
 
 public protocol MessageThreadCellViewModelInputs {
-  func configureWith(messageThread messageThread: MessageThread)
+  func configureWith(messageThread: MessageThread)
+  func setSelected(_ selected: Bool)
 }
 
 public protocol MessageThreadCellViewModelOutputs {
   var date: Signal<String, NoError> { get }
   var dateAccessibilityLabel: Signal<String, NoError> { get }
   var messageBody: Signal<String, NoError> { get }
-  var participantAvatarURL: Signal<NSURL?, NoError> { get }
+  var participantAvatarURL: Signal<URL?, NoError> { get }
   var participantName: Signal<String, NoError> { get }
   var projectName: Signal<String, NoError> { get }
   var replyIndicatorHidden: Signal<Bool, NoError> { get }
   var unreadIndicatorHidden: Signal<Bool, NoError> { get }
+
 }
 
 public protocol MessageThreadCellViewModelType {
@@ -27,21 +30,20 @@ public final class MessageThreadCellViewModel: MessageThreadCellViewModelType,
   MessageThreadCellViewModelInputs, MessageThreadCellViewModelOutputs {
 
   public init() {
-    let messageThread = self.messageThreadProperty.signal.ignoreNil()
-
+    let messageThread = self.messageThreadProperty.signal.skipNil()
     self.date = messageThread.map {
-      Format.date(secondsInUTC: $0.lastMessage.createdAt, dateStyle: .ShortStyle, timeStyle: .NoStyle)
+      Format.date(secondsInUTC: $0.lastMessage.createdAt, dateStyle: .short, timeStyle: .none)
     }
 
     self.dateAccessibilityLabel = messageThread.map {
-      Format.date(secondsInUTC: $0.lastMessage.createdAt, dateStyle: .LongStyle, timeStyle: .NoStyle)
+      Format.date(secondsInUTC: $0.lastMessage.createdAt, dateStyle: .long, timeStyle: .none)
     }
 
     self.messageBody = messageThread.map {
-      $0.lastMessage.body.stringByReplacingOccurrencesOfString("\n", withString: " ")
+      $0.lastMessage.body.replacingOccurrences(of: "\n", with: " ")
     }
 
-    self.participantAvatarURL = messageThread.map { NSURL(string: $0.participant.avatar.medium) }
+    self.participantAvatarURL = messageThread.map { URL(string: $0.participant.avatar.medium) }
 
     self.participantName = messageThread
       .map { thread -> String in
@@ -57,18 +59,30 @@ public final class MessageThreadCellViewModel: MessageThreadCellViewModelType,
     self.replyIndicatorHidden = messageThread.map {
       $0.lastMessage.sender.id != AppEnvironment.current.currentUser?.id
     }
-    self.unreadIndicatorHidden = messageThread.map { $0.unreadMessagesCount == 0 }
+
+    messageThread
+      .takeWhen(self.setSelectedProperty.signal.filter(isTrue))
+      .observeValues(markedAsRead)
+
+    self.unreadIndicatorHidden = Signal.merge(
+      self.setSelectedProperty.signal.filter(isTrue).mapConst(true),
+      messageThread.map { !hasUnreadMessages(for: $0) }
+    )
   }
 
-  private let messageThreadProperty = MutableProperty<MessageThread?>(nil)
-  public func configureWith(messageThread messageThread: MessageThread) {
+  fileprivate let messageThreadProperty = MutableProperty<MessageThread?>(nil)
+  public func configureWith(messageThread: MessageThread) {
     self.messageThreadProperty.value = messageThread
+  }
+  fileprivate let setSelectedProperty = MutableProperty<Bool>(false)
+  public func setSelected(_ selected: Bool) {
+    self.setSelectedProperty.value = selected
   }
 
   public let date: Signal<String, NoError>
   public let dateAccessibilityLabel: Signal<String, NoError>
   public let messageBody: Signal<String, NoError>
-  public let participantAvatarURL: Signal<NSURL?, NoError>
+  public let participantAvatarURL: Signal<URL?, NoError>
   public let participantName: Signal<String, NoError>
   public let projectName: Signal<String, NoError>
   public let replyIndicatorHidden: Signal<Bool, NoError>
@@ -76,4 +90,17 @@ public final class MessageThreadCellViewModel: MessageThreadCellViewModelType,
 
   public var inputs: MessageThreadCellViewModelInputs { return self }
   public var outputs: MessageThreadCellViewModelOutputs { return self }
+}
+
+private func hasUnreadMessages(for messageThread: MessageThread) -> Bool {
+  return (AppEnvironment.current.cache[cacheKey(for: messageThread)] as? Bool)
+    ?? (messageThread.unreadMessagesCount > 0)
+}
+
+private func cacheKey(for messageThread: MessageThread) -> String {
+  return "\(KSCache.ksr_messageThreadHasUnreadMessages)_\(messageThread.id)"
+}
+
+private func markedAsRead(for messageThread: MessageThread) {
+  AppEnvironment.current.cache[cacheKey(for: messageThread)] = false
 }

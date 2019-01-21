@@ -1,22 +1,26 @@
 import KsApi
 import Library
 import Prelude
+import Social
 import UIKit
 
 internal final class DiscoveryPageViewController: UITableViewController {
-  private var emptyStatesController: EmptyStatesViewController?
-  private let dataSource = DiscoveryProjectsDataSource()
-  private let loadingIndicatorView = UIActivityIndicatorView()
+  fileprivate var emptyStatesController: EmptyStatesViewController?
+  fileprivate let dataSource = DiscoveryProjectsDataSource()
+  fileprivate let loadingIndicatorView = UIActivityIndicatorView()
+  private var sessionEndedObserver: Any?
+  private var sessionStartedObserver: Any?
+  private var currentEnvironmentChangedObserver: Any?
+  fileprivate let viewModel: DiscoveryPageViewModelType = DiscoveryPageViewModel()
+  fileprivate let shareViewModel: ShareViewModelType = ShareViewModel()
 
-  private let viewModel: DiscoveryPageViewModelType = DiscoveryPageViewModel()
-
-  internal static func configuredWith(sort sort: DiscoveryParams.Sort) -> DiscoveryPageViewController {
-    let vc = Storyboard.DiscoveryPage.instantiate(DiscoveryPageViewController)
+  internal static func configuredWith(sort: DiscoveryParams.Sort) -> DiscoveryPageViewController {
+    let vc = Storyboard.DiscoveryPage.instantiate(DiscoveryPageViewController.self)
     vc.viewModel.inputs.configureWith(sort: sort)
     return vc
   }
 
-  internal func change(filter filter: DiscoveryParams) {
+  internal func change(filter: DiscoveryParams) {
     self.viewModel.inputs.selectedFilter(filter)
   }
 
@@ -27,43 +31,57 @@ internal final class DiscoveryPageViewController: UITableViewController {
 
     self.tableView.dataSource = self.dataSource
 
-    NSNotificationCenter.defaultCenter()
-      .addObserverForName(CurrentUserNotifications.sessionStarted, object: nil, queue: nil) { [weak self] _ in
+    self.tableView.register(nib: Nib.DiscoveryPostcardCell)
+
+    self.sessionStartedObserver = NotificationCenter.default
+      .addObserver(forName: .ksr_sessionStarted, object: nil, queue: nil) { [weak self] _ in
         self?.viewModel.inputs.userSessionStarted()
     }
 
-    NSNotificationCenter.defaultCenter()
-      .addObserverForName(CurrentUserNotifications.sessionEnded, object: nil, queue: nil) { [weak self] _ in
+    self.sessionEndedObserver = NotificationCenter.default
+      .addObserver(forName: .ksr_sessionEnded, object: nil, queue: nil) { [weak self] _ in
         self?.viewModel.inputs.userSessionEnded()
     }
+
+    self.currentEnvironmentChangedObserver = NotificationCenter.default
+      .addObserver(forName: .ksr_environmentChanged, object: nil, queue: nil, using: { [weak self] _ in
+        self?.viewModel.inputs.currentEnvironmentChanged(environment:
+          AppEnvironment.current.apiService.serverConfig.environment)
+      })
 
     let emptyVC = EmptyStatesViewController.configuredWith(emptyState: nil)
     self.emptyStatesController = emptyVC
     emptyVC.delegate = self
-    self.addChildViewController(emptyVC)
+    self.addChild(emptyVC)
     self.view.addSubview(emptyVC.view)
-    NSLayoutConstraint.activateConstraints([
-      emptyVC.view.topAnchor.constraintEqualToAnchor(self.view.topAnchor),
-      emptyVC.view.leadingAnchor.constraintEqualToAnchor(self.view.leadingAnchor),
-      emptyVC.view.bottomAnchor.constraintEqualToAnchor(self.view.bottomAnchor),
-      emptyVC.view.trailingAnchor.constraintEqualToAnchor(self.view.trailingAnchor),
+    NSLayoutConstraint.activate([
+      emptyVC.view.topAnchor.constraint(equalTo: self.view.topAnchor),
+      emptyVC.view.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+      emptyVC.view.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
+      emptyVC.view.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
       ])
-    emptyVC.didMoveToParentViewController(self)
+    emptyVC.didMove(toParent: self)
   }
 
-  internal override func viewWillAppear(animated: Bool) {
+  deinit {
+    self.sessionEndedObserver.doIfSome(NotificationCenter.default.removeObserver)
+    self.sessionStartedObserver.doIfSome(NotificationCenter.default.removeObserver)
+    self.currentEnvironmentChangedObserver.doIfSome(NotificationCenter.default.removeObserver)
+  }
+
+  internal override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
 
     self.viewModel.inputs.viewWillAppear()
   }
 
-  internal override func viewDidAppear(animated: Bool) {
+  internal override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
 
     self.viewModel.inputs.viewDidAppear()
   }
 
-  internal override func viewDidDisappear(animated: Bool) {
+  internal override func viewDidDisappear(_ animated: Bool) {
     super.viewDidDisappear(animated)
 
     self.viewModel.inputs.viewDidDisappear(animated: animated)
@@ -78,98 +96,112 @@ internal final class DiscoveryPageViewController: UITableViewController {
   internal override func bindStyles() {
     super.bindStyles()
 
-    self
+    _ = self
       |> baseTableControllerStyle(estimatedRowHeight: 200.0)
 
-    self.loadingIndicatorView
-      |> UIActivityIndicatorView.lens.hidesWhenStopped .~ true
-      |> UIActivityIndicatorView.lens.activityIndicatorViewStyle .~ .White
-      |> UIActivityIndicatorView.lens.color .~ .ksr_navy_900
+    _ = self.loadingIndicatorView
+      |> baseActivityIndicatorStyle
   }
 
-  // swiftlint:disable function_body_length
-  internal override func bindViewModel() {
+    internal override func bindViewModel() {
     super.bindViewModel()
 
     self.loadingIndicatorView.rac.animating = self.viewModel.outputs.projectsAreLoading
 
     self.viewModel.outputs.activitiesForSample
       .observeForUI()
-      .observeNext { [weak self] activities in
+      .observeValues { [weak self] activities in
         self?.dataSource.load(activities: activities)
         self?.tableView.reloadData()
     }
 
     self.viewModel.outputs.asyncReloadData
       .observeForUI()
-      .observeNext { [weak self] in
-        dispatch_async(dispatch_get_main_queue()) {
+      .observeValues { [weak self] in
+        DispatchQueue.main.async {
           self?.tableView.reloadData()
         }
     }
 
     self.viewModel.outputs.goToActivityProject
       .observeForControllerAction()
-      .observeNext { [weak self] in self?.goTo(project: $0, refTag: $1) }
+      .observeValues { [weak self] in self?.goTo(project: $0, refTag: $1) }
 
     self.viewModel.outputs.goToProjectPlaylist
       .observeForControllerAction()
-      .observeNext { [weak self] in self?.goTo(project: $0, initialPlaylist: $1, refTag: $2) }
+      .observeValues { [weak self] in
+        self?.goTo(project: $0, initialPlaylist: $1, refTag: $2)
+      }
 
     self.viewModel.outputs.goToProjectUpdate
       .observeForControllerAction()
-      .observeNext { [weak self] project, update in self?.goTo(project: project, update: update) }
+      .observeValues { [weak self] project, update in self?.goTo(project: project, update: update) }
 
-    self.viewModel.outputs.projects
+    self.viewModel.outputs.projectsLoaded
       .observeForUI()
-      .observeNext { [weak self] projects in
-        self?.dataSource.load(projects: projects)
+      .observeValues { [weak self] projects, params in
+        self?.dataSource.load(projects: projects, params: params)
         self?.tableView.reloadData()
-    }
+        self?.updateProjectPlaylist(projects)
+      }
 
     self.viewModel.outputs.showOnboarding
       .observeForUI()
-      .observeNext { [weak self] in
+      .observeValues { [weak self] in
         self?.dataSource.show(onboarding: $0)
         self?.tableView.reloadData()
     }
 
     self.viewModel.outputs.setScrollsToTop
       .observeForUI()
-      .observeNext { [weak self] in
-        self?.tableView ?|> UIScrollView.lens.scrollsToTop .~ $0
+      .observeValues { [weak self] in
+        _ = self?.tableView ?|> UIScrollView.lens.scrollsToTop .~ $0
     }
+
+    self.viewModel.outputs.scrollToProjectRow
+      .observeForUI()
+      .observeValues { [weak self] row in
+        guard let _self = self else { return }
+        _self.tableView.scrollToRow(at: _self.dataSource.indexPath(forProjectRow: row),
+                                    at: .top,
+                                    animated: false)
+    }
+
+    self.shareViewModel.outputs.showShareSheet
+      .observeForControllerAction()
+      .observeValues { [weak self] in self?.showShareSheet($0, shareContextView: $1) }
 
     self.viewModel.outputs.showEmptyState
       .observeForUI()
-      .observeNext { [weak self] emptyState in
+      .observeValues { [weak self] emptyState in
         self?.showEmptyState(emptyState)
     }
 
     self.viewModel.outputs.hideEmptyState
       .observeForUI()
-      .observeNext { [weak self] in
+      .observeValues { [weak self] in
         self?.emptyStatesController?.view.alpha = 0
-        self?.emptyStatesController?.view.hidden = true
+        self?.emptyStatesController?.view.isHidden = true
 
-        if let discovery = self?.parentViewController?.parentViewController as? DiscoveryViewController {
+        if let discovery = self?.parent?.parent as? DiscoveryViewController {
           discovery.setSortsEnabled(true)
         }
     }
   }
-  // swiftlint:enable function_body_length
 
-  internal override func tableView(tableView: UITableView,
-                                   willDisplayCell cell: UITableViewCell,
-                                   forRowAtIndexPath indexPath: NSIndexPath) {
+  internal override func tableView(_ tableView: UITableView,
+                                   willDisplay cell: UITableViewCell,
+                                   forRowAt indexPath: IndexPath) {
 
-    if let cell = cell as? ActivitySampleBackingCell where cell.delegate == nil {
+    if let cell = cell as? DiscoveryPostcardCell {
       cell.delegate = self
-    } else if let cell = cell as? ActivitySampleFollowCell where cell.delegate == nil {
+    } else if let cell = cell as? ActivitySampleBackingCell, cell.delegate == nil {
       cell.delegate = self
-    } else if let cell = cell as? ActivitySampleProjectCell where cell.delegate == nil {
+    } else if let cell = cell as? ActivitySampleFollowCell, cell.delegate == nil {
       cell.delegate = self
-    } else if let cell = cell as? DiscoveryOnboardingCell where cell.delegate == nil {
+    } else if let cell = cell as? ActivitySampleProjectCell, cell.delegate == nil {
+      cell.delegate = self
+    } else if let cell = cell as? DiscoveryOnboardingCell, cell.delegate == nil {
       cell.delegate = self
     }
 
@@ -177,8 +209,8 @@ internal final class DiscoveryPageViewController: UITableViewController {
                                          outOf: self.dataSource.numberOfItems())
   }
 
-  internal override func tableView(tableView: UITableView,
-                                   didSelectRowAtIndexPath indexPath: NSIndexPath) {
+  internal override func tableView(_ tableView: UITableView,
+                                   didSelectRowAt indexPath: IndexPath) {
 
     if let project = self.dataSource.projectAtIndexPath(indexPath) {
       self.viewModel.inputs.tapped(project: project)
@@ -187,37 +219,63 @@ internal final class DiscoveryPageViewController: UITableViewController {
     }
   }
 
-  private func goTo(project project: Project, refTag: RefTag) {
-    let vc = ProjectNavigatorViewController.configuredWith(project: project, refTag: refTag)
-    self.presentViewController(vc, animated: true, completion: nil)
+  fileprivate func showShareSheet(_ controller: UIActivityViewController, shareContextView: UIView?) {
+
+    controller.completionWithItemsHandler = { [weak self] activityType, completed, returnedItems, error in
+
+      self?.shareViewModel.inputs.shareActivityCompletion(
+        with: .init(activityType: activityType,
+                    completed: completed,
+                    returnedItems: returnedItems,
+                    activityError: error)
+      )
+    }
+
+    if UIDevice.current.userInterfaceIdiom == .pad {
+      controller.modalPresentationStyle = .popover
+      let popover = controller.popoverPresentationController
+      popover?.sourceView = shareContextView
+    }
+
+    self.present(controller, animated: true, completion: nil)
   }
 
-  private func goTo(project project: Project, initialPlaylist: [Project], refTag: RefTag) {
+  fileprivate func goTo(project: Project, refTag: RefTag) {
+    let vc = ProjectNavigatorViewController.configuredWith(project: project, refTag: refTag)
+    self.present(vc, animated: true, completion: nil)
+  }
+
+  fileprivate func goTo(project: Project, initialPlaylist: [Project], refTag: RefTag) {
     let vc = ProjectNavigatorViewController.configuredWith(project: project,
                                                            refTag: refTag,
                                                            initialPlaylist: initialPlaylist,
                                                            navigatorDelegate: self)
-    self.presentViewController(vc, animated: true, completion: nil)
+    self.present(vc, animated: true, completion: nil)
   }
 
-  private func goTo(project project: Project, update: Update) {
-    let vc = UpdateViewController.configuredWith(project: project, update: update)
+  fileprivate func goTo(project: Project, update: Update) {
+    let vc = UpdateViewController.configuredWith(project: project, update: update, context: .activitySample)
     self.navigationController?.pushViewController(vc, animated: true)
   }
 
-  private func showEmptyState(emptyState: EmptyState) {
+  fileprivate func showEmptyState(_ emptyState: EmptyState) {
     guard let emptyVC = self.emptyStatesController else { return }
 
     emptyVC.setEmptyState(emptyState)
-    emptyVC.view.hidden = false
+    emptyVC.view.isHidden = false
     self.view.bringSubviewToFront(emptyVC.view)
-    UIView.animateWithDuration(0.3) {
+    UIView.animate(withDuration: 0.3,
+                   animations: {
       self.emptyStatesController?.view.alpha = 1.0
-    }
-
-    if let discovery = self.parentViewController?.parentViewController as? DiscoveryViewController {
+    }, completion: nil)
+    if let discovery = self.parent?.parent as? DiscoveryViewController {
       discovery.setSortsEnabled(false)
     }
+  }
+
+  private func updateProjectPlaylist(_ playlist: [Project]) {
+    guard let navigator = self.presentedViewController as? ProjectNavigatorViewController else { return }
+    navigator.updatePlaylist(playlist)
   }
 }
 
@@ -233,14 +291,14 @@ extension DiscoveryPageViewController: DiscoveryOnboardingCellDelegate {
   internal func discoveryOnboardingTappedSignUpLoginButton() {
     let loginTout = LoginToutViewController.configuredWith(loginIntent: .discoveryOnboarding)
     let nav = UINavigationController(rootViewController: loginTout)
-    nav.modalPresentationStyle = .FormSheet
+    nav.modalPresentationStyle = .formSheet
 
-    self.presentViewController(nav, animated: true, completion: nil)
+    self.present(nav, animated: true, completion: nil)
   }
 }
 
 extension DiscoveryPageViewController: EmptyStatesViewControllerDelegate {
-  func emptyStatesViewController(viewController: EmptyStatesViewController,
+  func emptyStatesViewController(_ viewController: EmptyStatesViewController,
                                  goToDiscoveryWithParams params: DiscoveryParams?) {
 
     self.view.window?.rootViewController
@@ -254,5 +312,40 @@ extension DiscoveryPageViewController: EmptyStatesViewControllerDelegate {
   }
 }
 
+extension DiscoveryPageViewController: DiscoveryPostcardCellDelegate {
+  internal func discoveryPostcard(cell: DiscoveryPostcardCell, tappedShare context: ShareContext,
+                                  fromSourceView: UIView) {
+    self.shareViewModel.inputs.configureWith(shareContext: context, shareContextView: fromSourceView)
+    self.shareViewModel.inputs.shareButtonTapped()
+  }
+
+  internal func discoveryPostcardCellProjectSaveAlert() {
+    let alertController = UIAlertController(
+      title: Strings.Project_saved(),
+      message: Strings.Well_remind_you_forty_eight_hours_before_this_project_ends(),
+      preferredStyle: .alert)
+    alertController.addAction(
+      UIAlertAction(
+        title: Strings.Got_it(),
+        style: .cancel,
+        handler: nil
+      )
+    )
+
+    self.present(alertController, animated: true, completion: nil)
+  }
+
+  internal func discoveryPostcardCellGoToLoginTout() {
+    let vc = LoginToutViewController.configuredWith(loginIntent: .starProject)
+    let nav = UINavigationController(rootViewController: vc)
+    nav.modalPresentationStyle = .formSheet
+
+    self.present(nav, animated: true, completion: nil)
+  }
+ }
+
 extension DiscoveryPageViewController: ProjectNavigatorDelegate {
+  func transitionedToProject(at index: Int) {
+    self.viewModel.inputs.transitionedToProject(at: index, outOf: self.dataSource.numberOfItems())
+  }
 }

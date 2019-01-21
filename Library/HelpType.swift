@@ -1,29 +1,56 @@
-public enum HelpType {
+import UIKit
+
+public enum HelpType: SettingsCellTypeProtocol {
+  case helpCenter
   case contact
-  case cookie
-  case faq
   case howItWorks
-  case privacy
   case terms
+  case privacy
+  case cookie
   case trust
 
   public var title: String {
     switch self {
+    case .helpCenter:
+      return Strings.Help_center()
     case .contact:
-    return Strings.login_tout_help_sheet_contact()
-    case .cookie:
-      return Strings.login_tout_help_sheet_cookie()
-    case .faq:
-      return Strings.profile_settings_about_faq()
+      return Strings.profile_settings_about_contact()
     case .howItWorks:
-    return Strings.login_tout_help_sheet_how_it_works()
-    case .privacy:
-      return Strings.login_tout_help_sheet_privacy()
+      return Strings.profile_settings_about_how_it_works()
     case .terms:
-      return Strings.login_tout_help_sheet_terms()
+      return Strings.profile_settings_about_terms()
+    case .privacy:
+      return Strings.profile_settings_about_privacy()
+    case .cookie:
+      return Strings.profile_settings_about_cookie()
     case .trust:
       return ""
     }
+  }
+
+  public var showArrowImageView: Bool {
+    switch self {
+    case .contact:
+      return true
+    default:
+      return false
+    }
+  }
+
+  public var textColor: UIColor {
+    return .ksr_soft_black
+  }
+
+  public var hideDescriptionLabel: Bool {
+    return true
+  }
+
+  public var description: String? {
+    return nil
+  }
+
+  public var detailTextColor: UIColor {
+    return .ksr_text_dark_grey_400
   }
 
   public var trackingString: String {
@@ -32,7 +59,7 @@ public enum HelpType {
       return "Contact"
     case .cookie:
       return "Cookie Policy"
-    case .faq:
+    case .helpCenter:
       return "FAQ"
     case .howItWorks:
       return "How It Works"
@@ -49,7 +76,7 @@ public enum HelpType {
 extension HelpType: Equatable {}
 public func == (lhs: HelpType, rhs: HelpType) -> Bool {
   switch (lhs, rhs) {
-  case (.contact, .contact), (.cookie, .cookie), (.faq, .faq), (.howItWorks, .howItWorks),
+  case (.contact, .contact), (.cookie, .cookie), (.helpCenter, .helpCenter), (.howItWorks, .howItWorks),
        (.privacy, .privacy), (.terms, .terms), (.trust, .trust):
     return true
   default:

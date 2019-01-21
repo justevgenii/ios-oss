@@ -1,5 +1,5 @@
 import KsApi
-import ReactiveCocoa
+import ReactiveSwift
 import ReactiveExtensions
 import Result
 
@@ -8,7 +8,7 @@ public protocol DashboardActionCellViewModelInputs {
   func activityTapped()
 
   /// Call to configure cell with project value.
-  func configureWith(project project: Project)
+  func configureWith(project: Project)
 
   /// Call when the messages button is tapped.
   func messagesTapped()
@@ -28,7 +28,7 @@ public protocol DashboardActionCellViewModelOutputs {
   var goToActivity: Signal<Project, NoError> { get }
 
   /// Emits with the project when should go to messages screen.
-  var goToMessages: Signal<Project, NoError> { get }
+  var goToMessages: Signal<(), NoError> { get }
 
   /// Emits with the project when should go to post update screen.
   var goToPostUpdate: Signal<Project, NoError> { get }
@@ -73,11 +73,11 @@ public final class DashboardActionCellViewModel: DashboardActionCellViewModelInp
   DashboardActionCellViewModelOutputs, DashboardActionCellViewModelType {
 
   public init() {
-    let project = self.projectProperty.signal.ignoreNil()
+    let project = self.projectProperty.signal.skipNil()
 
     self.goToActivity = project.takeWhen(self.activityTappedProperty.signal)
 
-    self.goToMessages = project.takeWhen(self.messagesTappedProperty.signal)
+    self.goToMessages = project.ignoreValues().takeWhen(self.messagesTappedProperty.signal)
 
     self.goToPostUpdate = project.takeWhen(self.postUpdateTappedProperty.signal)
 
@@ -85,16 +85,14 @@ public final class DashboardActionCellViewModel: DashboardActionCellViewModelInp
       .map { project in
         if let lastUpdatePublishedAt = project.memberData.lastUpdatePublishedAt {
           return Strings.dashboard_post_update_button_subtitle_last_updated_on_date(
-            date: Format.date(secondsInUTC: lastUpdatePublishedAt, timeStyle: .NoStyle)
+            date: Format.date(secondsInUTC: lastUpdatePublishedAt, timeStyle: .none)
           )
         }
 
-        if .Some(project.creator) == AppEnvironment.current.currentUser {
+        if .some(project.creator) == AppEnvironment.current.currentUser {
           return Strings.dashboard_post_update_button_subtitle_you_have_not_posted_an_update_yet()
         } else {
-          return localizedString(
-            key: "No_one_has_posted_an_update_yet", defaultValue: "No one has posted an update yet."
-          )
+          return Strings.No_one_has_posted_an_update_yet()
         }
     }
 
@@ -123,30 +121,30 @@ public final class DashboardActionCellViewModel: DashboardActionCellViewModelInp
     self.activityRowHidden = project.map { !$0.memberData.permissions.contains(.viewPledges) }
   }
 
-  private let activityTappedProperty = MutableProperty()
+  fileprivate let activityTappedProperty = MutableProperty(())
   public func activityTapped() {
     activityTappedProperty.value = ()
   }
 
-  private let messagesTappedProperty = MutableProperty()
+  fileprivate let messagesTappedProperty = MutableProperty(())
   public func messagesTapped() {
     messagesTappedProperty.value = ()
   }
 
-  private let postUpdateTappedProperty = MutableProperty()
+  fileprivate let postUpdateTappedProperty = MutableProperty(())
   public func postUpdateTapped() {
     postUpdateTappedProperty.value = ()
   }
 
-  private let projectProperty = MutableProperty<Project?>(nil)
-  public func configureWith(project project: Project) {
+  fileprivate let projectProperty = MutableProperty<Project?>(nil)
+  public func configureWith(project: Project) {
     self.projectProperty.value = project
   }
 
   public let activityButtonAccessibilityLabel: Signal<String, NoError>
   public let activityRowHidden: Signal<Bool, NoError>
   public let goToActivity: Signal<Project, NoError>
-  public let goToMessages: Signal<Project, NoError>
+  public let goToMessages: Signal<(), NoError>
   public let goToPostUpdate: Signal<Project, NoError>
   public let lastUpdatePublishedAt: Signal<String, NoError>
   public let lastUpdatePublishedLabelHidden: Signal<Bool, NoError>

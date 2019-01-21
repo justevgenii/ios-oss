@@ -3,19 +3,22 @@ import Library
 import Prelude
 import Prelude_UIKit
 import UIKit
-import XCPlayground
+import PlaygroundSupport
 @testable import Kickstarter_Framework
+
+initialize()
+let controller = DashboardViewController.instantiate()
 
 let rewards = (1...6).map {
   .template
-    |> Reward.lens.backersCount .~ $0 * 5
+    |> Reward.lens.backersCount .~ ($0 * 5)
     |> Reward.lens.id .~ $0
-    |> Reward.lens.minimum .~ $0 * 4
+    |> Reward.lens.minimum .~ ($0 * 4)
 }
 
 let externalReferrerStats = (1...3).map {
   .template
-    |> ProjectStatsEnvelope.ReferrerStats.lens.backersCount .~ $0 * 5
+    |> ProjectStatsEnvelope.ReferrerStats.lens.backersCount .~ ($0 * 5)
     |> ProjectStatsEnvelope.ReferrerStats.lens.code .~ "direct"
     |> ProjectStatsEnvelope.ReferrerStats.lens.percentageOfDollars .~ 0.01
     |> ProjectStatsEnvelope.ReferrerStats.lens.pledged .~ 2
@@ -24,7 +27,7 @@ let externalReferrerStats = (1...3).map {
 }
 let internalReferrerStats = (1...3).map {
   .template
-    |> ProjectStatsEnvelope.ReferrerStats.lens.backersCount .~ $0 * 10
+    |> ProjectStatsEnvelope.ReferrerStats.lens.backersCount .~ ($0 * 10)
     |> ProjectStatsEnvelope.ReferrerStats.lens.code .~ "search"
     |> ProjectStatsEnvelope.ReferrerStats.lens.percentageOfDollars .~ 0.3
     |> ProjectStatsEnvelope.ReferrerStats.lens.pledged .~ 3
@@ -33,7 +36,7 @@ let internalReferrerStats = (1...3).map {
 }
 let customReferrerStats = (1...3).map {
   .template
-    |> ProjectStatsEnvelope.ReferrerStats.lens.backersCount .~ $0 * 10
+    |> ProjectStatsEnvelope.ReferrerStats.lens.backersCount .~ ($0 * 10)
     |> ProjectStatsEnvelope.ReferrerStats.lens.code .~ "search"
     |> ProjectStatsEnvelope.ReferrerStats.lens.percentageOfDollars .~ 0.01
     |> ProjectStatsEnvelope.ReferrerStats.lens.pledged .~ 3
@@ -45,9 +48,9 @@ let referrerStats = externalReferrerStats + internalReferrerStats + customReferr
 
 let rewardStats = (1...6).map {
   .template
-    |> ProjectStatsEnvelope.RewardStats.lens.backersCount .~ $0 * 5
+    |> ProjectStatsEnvelope.RewardStats.lens.backersCount .~ ($0 * 5)
     |> ProjectStatsEnvelope.RewardStats.lens.id .~ $0
-    |> ProjectStatsEnvelope.RewardStats.lens.minimum .~ $0 * 4
+    |> ProjectStatsEnvelope.RewardStats.lens.minimum .~ ($0 * 4)
     |> ProjectStatsEnvelope.RewardStats.lens.pledged .~ ($0 * $0 * 4 * 5)
 }
 
@@ -67,45 +70,41 @@ let cosmicSurgery = .cosmicSurgery
 let stats = [
   3_000, 4_000, 5_000, 7_000, 8_000,
   13_000, 14_000, 15_000, 17_000, 18_000,
-//  20_000, 21_000, 22_000, 23_000, 24_000,
-//  24_000, 24_000, 24_200, 24_400, 24_800,
-//  25_000, 25_800, 26_800, 28_000, 29_500,
-//  31_500, 33_000, 35_000, 37_000, 40_000
+  20_000, 21_000, 22_000, 23_000, 24_000,
+  24_000, 24_000, 24_200, 24_400, 24_800,
+  25_000, 25_800, 26_800, 28_000, 29_500,
+  31_500, 33_000, 35_000, 37_000, 40_000
 ]
 
-let fundingStats = stats.enumerate().map { idx, pledged in
+let fundingStats = stats.enumerated().map { idx, pledged in
   .template
     |> ProjectStatsEnvelope.FundingDateStats.lens.cumulativePledged .~ pledged
-    |> ProjectStatsEnvelope.FundingDateStats.lens.date .~ (cosmicSurgery.dates.launchedAt + NSTimeInterval(idx * 86_400))
+    |> ProjectStatsEnvelope.FundingDateStats.lens.date .~ (cosmicSurgery.dates.launchedAt + TimeInterval(idx * 86_400))
 }
 
 AppEnvironment.replaceCurrentEnvironment(
   apiService: MockService(
+    fetchProjectsResponse: [
+        cosmicSurgery
+            |> Project.lens.memberData.lastUpdatePublishedAt .~ NSDate().timeIntervalSince1970
+            |> Project.lens.memberData.unreadMessagesCount .~ 42
+            |> Project.lens.memberData.unseenActivityCount .~ 1_299
+            |> Project.lens.memberData.permissions .~ [.post, .viewPledges]
+            |> Project.lens.rewards .~ rewards
+    ],
     fetchProjectStatsResponse: .template
       |> ProjectStatsEnvelope.lens.cumulativeStats .~ cumulativeStats
       |> ProjectStatsEnvelope.lens.referralDistribution .~ referrerStats
       |> ProjectStatsEnvelope.lens.rewardDistribution .~ rewardStats
       |> ProjectStatsEnvelope.lens.videoStats .~ videoStats
-      |> ProjectStatsEnvelope.lens.fundingDistribution .~ fundingStats,
-
-    fetchProjectsResponse: [
-      cosmicSurgery
-        |> Project.lens.memberData.lastUpdatePublishedAt .~ NSDate().timeIntervalSince1970
-        |> Project.lens.memberData.unreadMessagesCount .~ 42
-        |> Project.lens.memberData.unseenActivityCount .~ 1_299
-        |> Project.lens.memberData.permissions .~ [.post, .viewPledges]
-        |> Project.lens.rewards .~ rewards
-    ]
-  ),
+      |> ProjectStatsEnvelope.lens.fundingDistribution .~ fundingStats
+    ),
 
   currentUser: cosmicSurgery.creator,
   language: .en,
-  locale: NSLocale(localeIdentifier: "en"),
-  mainBundle: NSBundle.framework
+  locale: Locale(identifier: "en"),
+  mainBundle: Bundle.framework
 )
 
-initialize()
-let controller = DashboardViewController.instantiate()
-
-XCPlaygroundPage.currentPage.liveView = controller
-controller.view |> UIView.lens.frame.size.height .~ 1_250
+PlaygroundPage.current.liveView = controller
+controller.view |> UIView.lens.frame.size.height .~ 2_000

@@ -7,16 +7,18 @@ extension String {
    - parameter maxLength: The maximum length to truncate to.
    - parameter suffix: A string to replace the omitted portion with.
 
-   - returns: The truncated string.
+     - returns: The truncated string.
    */
-  public func truncated(maxLength maxLength: Int, suffix: String = "…") -> String {
+  public func truncated(maxLength: Int, suffix: String = "…") -> String {
 
-    let chars = self.characters
-    guard chars.count > maxLength else { return self }
+    guard self.count > maxLength else { return self }
 
-    let advancedBy = maxLength - suffix.characters.count
-    let str = String(chars.prefixUpTo(chars.startIndex.advancedBy(advancedBy, limit: chars.endIndex)))
+    let advancedBy = maxLength - suffix.count
 
-    return str + suffix
+    guard let index = self.index(self.startIndex, offsetBy: advancedBy, limitedBy: self.endIndex) else {
+      return self
+    }
+
+    return String(self.prefix(upTo: index)) + suffix
   }
 }

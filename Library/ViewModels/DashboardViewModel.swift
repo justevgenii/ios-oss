@@ -1,6 +1,6 @@
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import ReactiveExtensions
 import Result
 
@@ -26,11 +26,20 @@ public struct ProjectsDrawerData {
 }
 
 public protocol DashboardViewModelInputs {
+  /// Call to navigate to activities for project with id
+  func activitiesNavigated(projectId: Param)
+
   /// Call to switch display to another project from the drawer.
   func `switch`(toProject param: Param)
 
   /// Call when the projects drawer has animated out.
   func dashboardProjectsDrawerDidAnimateOut()
+
+  /// Call to open project messages thread
+  func messagesCellTapped()
+
+  /// Call to open message thread for specific project
+  func messageThreadNavigated(projectId: Param, messageThread: MessageThread)
 
   /// Call when the project context cell is tapped.
   func projectContextCellTapped()
@@ -38,8 +47,14 @@ public protocol DashboardViewModelInputs {
   /// Call when to show or hide the projects drawer.
   func showHideProjectsDrawer()
 
+  /// Call when the view loads.
+  func viewDidLoad()
+
   /// Call when the view will appear.
-  func viewWillAppear(animated animated: Bool)
+  func viewWillAppear(animated: Bool)
+
+  /// Call when the view will disappear
+  func viewWillDisappear()
 }
 
 public protocol DashboardViewModelOutputs {
@@ -56,8 +71,17 @@ public protocol DashboardViewModelOutputs {
   var fundingData: Signal<(funding: [ProjectStatsEnvelope.FundingDateStats],
                            project: Project), NoError> { get }
 
+  /// Emits when navigating to project activities
+  var goToActivities: Signal<Project, NoError> { get }
+
+  /// Emits when to go to project messages thread
+  var goToMessages: Signal<Project, NoError> { get }
+
+  /// Emits when opening specific project message thread
+  var goToMessageThread: Signal<(Project, MessageThread), NoError> { get }
+
   /// Emits when to go to the project page.
-  var goToProject: Signal<(Project, [Project], RefTag), NoError> { get }
+  var goToProject: Signal<(Project, RefTag), NoError> { get }
 
   /// Emits when should present projects drawer with data to populate it.
   var presentProjectsDrawer: Signal<[ProjectsDrawerData], NoError> { get }
@@ -65,8 +89,12 @@ public protocol DashboardViewModelOutputs {
   /// Emits the currently selected project to display in the context and action cells.
   var project: Signal<Project, NoError> { get }
 
+  /// Emits a boolean that determines if projects are currently loading.
+  var loaderIsAnimating: Signal<Bool, NoError> { get }
+
   /// Emits the cumulative, project, and referreral distribution data to display in the referrers cell.
-  var referrerData: Signal<(cumulative: ProjectStatsEnvelope.CumulativeStats, project: Project,
+  var referrerData: Signal<(cumulative: ProjectStatsEnvelope.CumulativeStats,
+    project: Project, aggregates: ProjectStatsEnvelope.ReferralAggregateStats,
     stats: [ProjectStatsEnvelope.ReferrerStats]), NoError> { get }
 
   /// Emits the project, reward stats, and cumulative pledges to display in the rewards cell.
@@ -85,37 +113,98 @@ public protocol DashboardViewModelType {
 }
 
 public final class DashboardViewModel: DashboardViewModelInputs, DashboardViewModelOutputs,
-  DashboardViewModelType {
+DashboardViewModelType {
 
-  // swiftlint:disable function_body_length
   public init() {
-    let projects = self.viewWillAppearAnimatedProperty.signal.filter(isFalse).ignoreValues()
+    let projects = self.viewWillAppearAnimatedProperty.signal.ignoreValues()
       .switchMap {
         AppEnvironment.current.apiService.fetchProjects(member: true)
-          .delay(AppEnvironment.current.apiDelayInterval, onScheduler: AppEnvironment.current.scheduler)
+          .ksr_delay(AppEnvironment.current.apiDelayInterval, on: AppEnvironment.current.scheduler)
           .demoteErrors()
           .map { $0.projects }
+          .prefix(value: [])
     }
 
+    let selectedProjectProducer = SignalProducer.merge(
+      self.switchToProjectProperty.producer,
+      self.activitiesNavigatedProperty.producer,
+      self.messageThreadNavigatedProperty.producer.skipNil().map(first)
+    )
+
+    /* Interim MutableProperty used to default to first project on viewWillAppear
+     * and to subsequently switch to the selected project.
+     */
+    let selectProjectPropertyOrFirst = MutableProperty<Param?>(nil)
+
+    selectProjectPropertyOrFirst <~ SignalProducer.combineLatest(
+      selectedProjectProducer,
+      self.viewWillAppearAnimatedProperty.producer.ignoreValues()
+    )
+    .map(first)
+    .skipRepeats { lhs, rhs in lhs == rhs }
+
     let projectsAndSelected = projects
-      .switchMap { [switchToProject = self.switchToProjectProperty.producer] projects in
-        switchToProject
-          .map { param in
-            find(projectForParam: param, in: projects) ?? projects.first
+      .switchMap { projects in
+        selectProjectPropertyOrFirst.producer
+          .map { param -> Project? in
+            param.flatMap { find(projectForParam: $0, in: projects) } ?? projects.first
           }
-          .ignoreNil()
+          .skipNil()
           .map { (projects, $0) }
     }
 
     self.project = projectsAndSelected.map(second)
 
+    self.loaderIsAnimating = Signal.merge(
+      self.viewDidLoadProperty.signal.map(const(true)),
+      projects.filter { !$0.isEmpty }.map(const(false))
+    ).skipRepeats()
+
+    /* Interim MutableProperty used to inject nil on viewWillDisappear
+     * in order to ensure that same MessageThread is not navigated to again
+     * on viewWillAppear as projects will refresh each time.
+     */
+    let messageThreadReceived = MutableProperty<(Param, MessageThread)?>(nil)
+
+    messageThreadReceived <~ Signal.merge(
+      self.viewWillDisappearProperty.signal.mapConst(nil),
+      self.messageThreadNavigatedProperty.signal
+    )
+
+    self.goToMessageThread = self.project
+      .switchMap { project in
+        messageThreadReceived.producer
+          .skipNil()
+          .filter { $0.0 == .id(project.id) }
+          .map { (project, $1) }
+      }
+
+    /* Interim MutableProperty used to inject nil on viewWillDisappear
+     * in order to ensure that same navigateToActivities is not navigated to again
+     * on viewWillAppear as projects will refresh each time.
+     */
+    let navigateToActivitiesReceived =  MutableProperty<Param?>(nil)
+
+    navigateToActivitiesReceived <~ Signal.merge(
+      self.viewWillDisappearProperty.signal.mapConst(nil),
+      self.activitiesNavigatedProperty.signal
+    )
+
+    self.goToActivities = self.project
+      .switchMap { project in
+        navigateToActivitiesReceived.producer
+          .skipNil()
+          .filter { $0 == .id(project.id) }
+          .map { _ in project }
+    }
+
     let selectedProjectAndStatsEvent = self.project
       .switchMap { project in
         AppEnvironment.current.apiService.fetchProjectStats(projectId: project.id)
-          .delay(AppEnvironment.current.apiDelayInterval, onScheduler: AppEnvironment.current.scheduler)
+          .ksr_delay(AppEnvironment.current.apiDelayInterval, on: AppEnvironment.current.scheduler)
           .map { (project, $0) }
           .materialize()
-      }
+    }
 
     let selectedProjectAndStats = selectedProjectAndStatsEvent.values()
 
@@ -126,10 +215,11 @@ public final class DashboardViewModel: DashboardViewModelInputs, DashboardViewMo
 
     self.referrerData = selectedProjectAndStats
       .map { project, stats in
-        (cumulative: stats.cumulativeStats, project: project, stats: stats.referralDistribution)
+        (cumulative: stats.cumulativeStats, project: project,
+         aggregates: stats.referralAggregateStats, stats: stats.referralDistribution)
     }
 
-    self.videoStats = selectedProjectAndStats.map { _, stats in stats.videoStats }.ignoreNil()
+    self.videoStats = selectedProjectAndStats.map { _, stats in stats.videoStats }.skipNil()
 
     self.rewardData = selectedProjectAndStats
       .map { project, stats in
@@ -138,10 +228,9 @@ public final class DashboardViewModel: DashboardViewModelInputs, DashboardViewMo
 
     let drawerStateProjectsAndSelectedProject = Signal.merge(
       projectsAndSelected.map { ($0, $1, false) },
-      projectsAndSelected.takeWhen(self.showHideProjectsDrawerProperty.signal).map { ($0, $1, true) }
-      )
+      projectsAndSelected
+        .takeWhen(self.showHideProjectsDrawerProperty.signal).map { ($0, $1, true) })
       .scan(nil) { (data, projectsProjectToggle) -> (DrawerState, [Project], Project)? in
-
         let (projects, project, toggle) = projectsProjectToggle
 
         return (
@@ -150,20 +239,20 @@ public final class DashboardViewModel: DashboardViewModelInputs, DashboardViewMo
           project
         )
       }
-      .ignoreNil()
+      .skipNil()
 
     self.updateTitleViewData = drawerStateProjectsAndSelectedProject
       .map { drawerState, projects, selectedProject in
         DashboardTitleViewData(
           drawerState: drawerState,
           isArrowHidden: projects.count <= 1,
-          currentProjectIndex: projects.indexOf(selectedProject) ?? 0
+          currentProjectIndex: projects.index(of: selectedProject) ?? 0
         )
     }
 
     let updateDrawerStateToOpen = self.updateTitleViewData
       .map { $0.drawerState == .open }
-      .skip(1)
+      .skip(first: 1)
 
     self.presentProjectsDrawer = drawerStateProjectsAndSelectedProject
       .filter { drawerState, _, _ in drawerState == .open }
@@ -171,7 +260,7 @@ public final class DashboardViewModel: DashboardViewModelInputs, DashboardViewMo
         projects.map { project in
           ProjectsDrawerData(
             project: project,
-            indexNum: projects.indexOf(project) ?? 0,
+            indexNum: projects.index(of: project) ?? 0,
             isChecked: project == selectedProject
           )
         }
@@ -183,73 +272,95 @@ public final class DashboardViewModel: DashboardViewModelInputs, DashboardViewMo
 
     self.dismissProjectsDrawer = self.projectsDrawerDidAnimateOutProperty.signal
 
-    self.goToProject = combineLatest(self.project, projects)
+    self.goToProject = self.project
       .takeWhen(self.projectContextCellTappedProperty.signal)
-      .map { project, projects in (project, projects, RefTag.dashboard) }
+      .map { ($0, RefTag.dashboard) }
+
+    self.goToMessages = self.project
+      .takeWhen(self.messagesCellTappedProperty.signal)
 
     self.focusScreenReaderOnTitleView = self.viewWillAppearAnimatedProperty.signal.ignoreValues()
 
     let projectForTrackingViews = Signal.merge(
-      projects.map { $0.first }.ignoreNil().take(1),
+      projects.map { $0.first }.skipNil().take(first: 1),
       self.project
         .takeWhen(self.viewWillAppearAnimatedProperty.signal.filter(isFalse))
     )
 
     projectForTrackingViews
-      .observeNext { AppEnvironment.current.koala.trackDashboardView(project: $0) }
+      .observeValues { AppEnvironment.current.koala.trackDashboardView(project: $0) }
 
     self.project
       .takeWhen(self.presentProjectsDrawer)
-      .observeNext { AppEnvironment.current.koala.trackDashboardShowProjectSwitcher(onProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackDashboardShowProjectSwitcher(onProject: $0) }
 
     let drawerHasClosedAndShouldTrack = Signal.merge(
       self.showHideProjectsDrawerProperty.signal.map { (drawerState: true, shouldTrack: true) },
       self.switchToProjectProperty.signal.map { _ in (drawerState: true, shouldTrack: false) }
-    )
+      )
       .scan(nil) { (data, toggledStateAndShouldTrack) -> (DrawerState, Bool)? in
         let (drawerState, shouldTrack) = toggledStateAndShouldTrack
         return drawerState
           ? ((data?.0.toggled ?? DrawerState.closed), shouldTrack)
           : (DrawerState.closed, shouldTrack)
       }
-      .ignoreNil()
+      .skipNil()
       .filter { drawerState, _ in drawerState == .open }
       .map { _, shouldTrack in shouldTrack }
 
     self.project
       .takePairWhen(drawerHasClosedAndShouldTrack)
       .filter { _, shouldTrack in shouldTrack }
-      .observeNext { project, _ in
+      .observeValues { project, _ in
         AppEnvironment.current.koala.trackDashboardClosedProjectSwitcher(onProject: project)
     }
 
     projects
-      .takePairWhen(self.switchToProjectProperty.signal)
+      .takePairWhen(selectProjectPropertyOrFirst.signal)
       .map { projects, param in find(projectForParam: param, in: projects) }
-      .ignoreNil()
-      .observeNext { AppEnvironment.current.koala.trackDashboardSwitchProject($0) }
+      .skipNil()
+      .observeValues { AppEnvironment.current.koala.trackDashboardSwitchProject($0) }
   }
-  // swiftlint:enable function_body_length
 
-  private let showHideProjectsDrawerProperty = MutableProperty()
+  fileprivate let showHideProjectsDrawerProperty = MutableProperty(())
   public func showHideProjectsDrawer() {
     self.showHideProjectsDrawerProperty.value = ()
   }
-  private let projectContextCellTappedProperty = MutableProperty()
+  fileprivate let projectContextCellTappedProperty = MutableProperty(())
   public func projectContextCellTapped() {
     self.projectContextCellTappedProperty.value = ()
   }
-  private let switchToProjectProperty = MutableProperty<Param?>(nil)
+  fileprivate let switchToProjectProperty = MutableProperty<Param?>(nil)
   public func `switch`(toProject param: Param) {
     self.switchToProjectProperty.value = param
   }
-  private let projectsDrawerDidAnimateOutProperty = MutableProperty()
+  fileprivate let activitiesNavigatedProperty = MutableProperty<Param?>(nil)
+  public func activitiesNavigated(projectId: Param) {
+    self.activitiesNavigatedProperty.value = projectId
+  }
+  fileprivate let messageThreadNavigatedProperty = MutableProperty<(Param, MessageThread)?>(nil)
+  public func messageThreadNavigated(projectId: Param, messageThread: MessageThread) {
+    self.messageThreadNavigatedProperty.value = (projectId, messageThread)
+  }
+  fileprivate let projectsDrawerDidAnimateOutProperty = MutableProperty(())
   public func dashboardProjectsDrawerDidAnimateOut() {
     self.projectsDrawerDidAnimateOutProperty.value = ()
   }
-  private let viewWillAppearAnimatedProperty = MutableProperty(false)
-  public func viewWillAppear(animated animated: Bool) {
+  fileprivate let viewDidLoadProperty = MutableProperty(())
+  public func viewDidLoad() {
+    self.viewDidLoadProperty.value = ()
+  }
+  fileprivate let viewWillAppearAnimatedProperty = MutableProperty(false)
+  public func viewWillAppear(animated: Bool) {
     self.viewWillAppearAnimatedProperty.value = animated
+  }
+  fileprivate let viewWillDisappearProperty = MutableProperty(())
+  public func viewWillDisappear() {
+    self.viewWillDisappearProperty.value = ()
+  }
+  fileprivate let messagesCellTappedProperty = MutableProperty(())
+  public func messagesCellTapped() {
+    self.messagesCellTappedProperty.value = ()
   }
 
   public let animateOutProjectsDrawer: Signal<(), NoError>
@@ -257,10 +368,15 @@ public final class DashboardViewModel: DashboardViewModelInputs, DashboardViewMo
   public let focusScreenReaderOnTitleView: Signal<(), NoError>
   public let fundingData: Signal<(funding: [ProjectStatsEnvelope.FundingDateStats],
     project: Project), NoError>
-  public let goToProject: Signal<(Project, [Project], RefTag), NoError>
+  public let goToActivities: Signal<Project, NoError>
+  public let goToMessages: Signal<Project, NoError>
+  public let goToMessageThread: Signal<(Project, MessageThread), NoError>
+  public let goToProject: Signal<(Project, RefTag), NoError>
   public let project: Signal<Project, NoError>
+  public let loaderIsAnimating: Signal<Bool, NoError>
   public let presentProjectsDrawer: Signal<[ProjectsDrawerData], NoError>
-  public let referrerData: Signal<(cumulative: ProjectStatsEnvelope.CumulativeStats, project: Project,
+  public let referrerData: Signal<(cumulative: ProjectStatsEnvelope.CumulativeStats,
+    project: Project, aggregates: ProjectStatsEnvelope.ReferralAggregateStats,
     stats: [ProjectStatsEnvelope.ReferrerStats]), NoError>
   public let rewardData: Signal<(stats: [ProjectStatsEnvelope.RewardStats], project: Project), NoError>
   public let videoStats: Signal<ProjectStatsEnvelope.VideoStats, NoError>

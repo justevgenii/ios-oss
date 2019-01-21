@@ -1,19 +1,19 @@
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import Result
 
 public protocol ActivityFriendBackingViewModelInputs {
   /// Call to configure with an Activity.
-  func configureWith(activity activity: Activity)
+  func configureWith(activity: Activity)
 }
 
 public protocol ActivityFriendBackingViewModelOutputs {
   /// Emits an a11y label for the cell.
   var cellAccessibilityLabel: Signal<String, NoError> { get }
 
-  /// Emits an NSURL for the friend avatar image view.
-  var friendImageURL: Signal<NSURL?, NoError> { get }
+  /// Emits an URL for the friend avatar image view.
+  var friendImageURL: Signal<URL?, NoError> { get }
 
   /// Emits an attributed string for the "friend backed" label.
   var friendTitle: Signal<NSAttributedString, NoError> { get }
@@ -28,7 +28,7 @@ public protocol ActivityFriendBackingViewModelOutputs {
   var percentFundedText: Signal<NSAttributedString, NoError> { get }
 
   /// Emits a url to the project image.
-  var projectImageURL: Signal<NSURL?, NoError> { get }
+  var projectImageURL: Signal<URL?, NoError> { get }
 
   /// Emits text for the project name label.
   var projectName: Signal<String, NoError> { get }
@@ -42,35 +42,34 @@ public protocol ActivityFriendBackingViewModelType {
 public final class ActivityFriendBackingViewModel: ActivityFriendBackingViewModelType,
 ActivityFriendBackingViewModelInputs, ActivityFriendBackingViewModelOutputs {
 
-  // swiftlint:disable:next function_body_length
   public init() {
-    let activity = self.activityProperty.signal.ignoreNil()
-    let project = activity.map { $0.project }.ignoreNil()
+    let activity = self.activityProperty.signal.skipNil()
+    let project = activity.map { $0.project }.skipNil()
 
     self.friendImageURL = activity
-      .map { ($0.user?.avatar.small).flatMap(NSURL.init) }
+      .map { ($0.user?.avatar.small).flatMap(URL.init) }
 
     self.friendTitle = activity
       .map { activity in
-        guard let categoryId = activity.project?.category.rootId else {
+        guard let categoryId = activity.project?.category.parentId ?? activity.project?.category.id else {
           return NSAttributedString(string: "")
         }
 
         let title = string(forCategoryId: categoryId, friendName: activity.user?.name ?? "")
         return title.simpleHtmlAttributedString(
           base: [
-            NSFontAttributeName: UIFont.ksr_subhead(size: 14),
-            NSForegroundColorAttributeName: UIColor.ksr_text_navy_500
+            NSAttributedString.Key.font: UIFont.ksr_subhead(size: 12),
+            NSAttributedString.Key.foregroundColor: UIColor.ksr_text_dark_grey_500
           ],
           bold: [
-            NSFontAttributeName: UIFont.ksr_subhead(size: 14),
-            NSForegroundColorAttributeName: UIColor.ksr_text_navy_700
+            NSAttributedString.Key.font: UIFont.ksr_subhead(size: 12),
+            NSAttributedString.Key.foregroundColor: UIColor.ksr_soft_black
           ],
           italic: [
-            NSFontAttributeName: UIFont.ksr_subhead(size: 14),
-            NSForegroundColorAttributeName: color(forCategoryId: categoryId)
+            NSAttributedString.Key.font: UIFont.ksr_subhead(size: 12),
+            NSAttributedString.Key.foregroundColor: UIColor.ksr_soft_black
           ])
-          ?? NSAttributedString(string: "")
+          ?? .init()
     }
 
     self.fundingBarColor = activity.map { progressBarColor(forActivityCategory: $0.category) }
@@ -83,24 +82,24 @@ ActivityFriendBackingViewModelInputs, ActivityFriendBackingViewModelOutputs {
 
     self.projectName = activity.map { $0.project?.name ?? "" }
 
-    self.projectImageURL = activity.map { ($0.project?.photo.full).flatMap(NSURL.init) }
+    self.projectImageURL = activity.map { ($0.project?.photo.full).flatMap(URL.init) }
 
-    self.cellAccessibilityLabel = combineLatest(self.friendTitle, self.projectName)
+    self.cellAccessibilityLabel = Signal.combineLatest(self.friendTitle, self.projectName)
       .map { "\($0.string), \($1)" }
   }
 
-  private let activityProperty = MutableProperty<Activity?>(nil)
-  public func configureWith(activity activity: Activity) {
+  fileprivate let activityProperty = MutableProperty<Activity?>(nil)
+  public func configureWith(activity: Activity) {
     self.activityProperty.value = activity
   }
 
-  public let friendImageURL: Signal<NSURL?, NoError>
+  public let friendImageURL: Signal<URL?, NoError>
   public let friendTitle: Signal<NSAttributedString, NoError>
   public let fundingBarColor: Signal<UIColor, NoError>
   public let fundingProgressPercentage: Signal<Float, NoError>
   public let percentFundedText: Signal<NSAttributedString, NoError>
   public let projectName: Signal<String, NoError>
-  public let projectImageURL: Signal<NSURL?, NoError>
+  public let projectImageURL: Signal<URL?, NoError>
   public let cellAccessibilityLabel: Signal<String, NoError>
 
   public var inputs: ActivityFriendBackingViewModelInputs { return self }
@@ -110,31 +109,17 @@ ActivityFriendBackingViewModelInputs, ActivityFriendBackingViewModelOutputs {
 private func progressBarColor(forActivityCategory category: Activity.Category) -> UIColor {
   switch category {
   case .cancellation, .failure, .suspension:
-    return .ksr_navy_500
+    return .ksr_dark_grey_400
   case .launch, .success:
-    return .ksr_green_400
+    return .ksr_green_700
   default:
-    return .ksr_green_400
-  }
-}
-
-public func color(forCategoryId id: Int?) -> UIColor {
-  let group = CategoryGroup(categoryId: id)
-  switch group {
-  case .none:
-    return .ksr_navy_700
-  case .culture:
-    return .ksr_red_400
-  case .entertainment:
-    return .ksr_violet_500
-  case .story:
-    return .ksr_forest_600
+    return .ksr_green_700
   }
 }
 
 // swiftlint:disable cyclomatic_complexity
-private func string(forCategoryId id: Int, friendName: String) -> String {
-  let root = RootCategory(categoryId: id)
+private func string(forCategoryId id: String, friendName: String) -> String {
+  let root = RootCategory(categoryId: Int(id) ?? -1)
   switch root {
   case .art:          return Strings.Friend_backed_art_project(friend_name: friendName)
   case .comics:       return Strings.Friend_backed_comics_project(friend_name: friendName)
@@ -155,28 +140,13 @@ private func string(forCategoryId id: Int, friendName: String) -> String {
   }
 }
 // swiftlint:enable cyclomatic_complexity
-
 private func percentFundedString(forActivity activity: Activity) -> NSAttributedString {
   guard let project = activity.project else { return NSAttributedString(string: "") }
 
   let percentage = Format.percentage(project.stats.percentFunded)
-  let funded = Strings.percentage_funded(percentage: percentage)
 
-  let mutableString = NSMutableAttributedString(string: funded, attributes: [
-    NSFontAttributeName: UIFont.ksr_caption1(),
-    NSForegroundColorAttributeName: UIColor.ksr_navy_500
-    ])
-
-  if let percentRange = mutableString.string.rangeOfString(percentage) {
-    let percentStartIndex = mutableString.string.startIndex.distanceTo(percentRange.startIndex)
-    mutableString.addAttributes([
-      NSFontAttributeName: UIFont.ksr_headline(size: 12.0),
-      NSForegroundColorAttributeName:
-        (activity.category == .cancellation
-          || activity.category == .failure
-          || activity.category == .suspension) ? UIColor.ksr_text_navy_500 : UIColor.ksr_green_500
-      ], range: NSRange(location: percentStartIndex, length: percentage.characters.count))
-  }
-
-  return mutableString
+    return NSAttributedString(string: percentage, attributes: [
+      NSAttributedString.Key.font: UIFont.ksr_caption1(size: 10),
+      NSAttributedString.Key.foregroundColor: UIColor.ksr_green_700
+      ])
 }

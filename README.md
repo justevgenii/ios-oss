@@ -1,4 +1,4 @@
-# Kickstarter for iOS
+<a href="https://www.kickstarter.com"><img src=".github/ksr-wordmark.svg" width="100%" alt="Kickstarter for iOS"></a>
 
 [![Circle CI](https://circleci.com/gh/kickstarter/ios-oss.svg?style=svg)](https://circleci.com/gh/kickstarter/ios-oss)
 
@@ -9,14 +9,14 @@ build the app.
 We’ve also open sourced our [Android app](https://github.com/kickstarter/android-oss),
 and read more about our journey to open source [here](https://kickstarter.engineering/open-sourcing-our-android-and-ios-apps-6891be909fcd).
 
-![Kickstarter for iOS](.github/app.jpg)
-
 ## Getting Started
 
-1. [Download](https://developer.apple.com/xcode/download/) the Xcode 7.3.1 release.
+1. Install Xcode.
 1. Clone this repository.
 1. Run `make bootstrap` to install tools and dependencies.
-1. Run `make test-all` to build and run tests on all platforms.
+1. Run `make test-all` to build and run tests on all platforms.  
+
+&#42; To provide a mock version that serves up hard-coded data immediately, set `KsApi.Secrets.isOSS` = `true`.
 
 ## Some fun things to explore
 
@@ -39,7 +39,7 @@ playgrounds [here](https://github.com/kickstarter/ios-oss/tree/master/Kickstarte
 * [We use view models](https://www.youtube.com/watch?v=EpTlqx6NjYo) as
 a lightweight way to isolate side effects and embrace a functional core. We
 write [these](https://github.com/kickstarter/ios-oss/tree/master/Library/ViewModels)
-as a pure mapping of input signals to output signals, and [test](https://github.com/kickstarter/ios-oss/tree/master/Library/Tests/ViewModels)
+as a pure mapping of input signals to output signals, and [test](https://github.com/kickstarter/ios-oss/tree/master/Library/ViewModels)
 them heavily, including tests for localization, accessibility and event
 tracking.
 
@@ -60,10 +60,6 @@ familiar with them:
 [Prelude](https://github.com/kickstarter/Kickstarter-Prelude): Foundation of
 types and functions we feel are missing from the Swift standard library.
 
-* [![CircleCI](https://circleci.com/gh/kickstarter/ios-ksapi.svg?style=svg)](https://circleci.com/gh/kickstarter/ios-ksapi)
-[KsApi](https://github.com/kickstarter/ios-ksapi): Models and reactive
-networking layer for fetching data from Kickstarter’s API.
-
 * [![Circle CI](https://circleci.com/gh/kickstarter/Kickstarter-ReactiveExtensions.svg?style=svg&)](https://circleci.com/gh/kickstarter/Kickstarter-ReactiveExtensions)
 [ReactiveExtensions](https://github.com/kickstarter/Kickstarter-ReactiveExtensions):
 A collection of operators we like to add to ReactiveCocoa.
@@ -73,7 +69,10 @@ A collection of operators we like to add to ReactiveCocoa.
 * [AlamofireImage](https://github.com/Alamofire/AlamofireImage)
 * [Argo](https://github.com/thoughtbot/Argo)
 * [FBSnapshotTestCase](https://github.com/facebook/ios-snapshot-test-case)
-* [ReactiveCocoa](https://github.com/ReactiveCocoa/ReactiveCocoa)
+* [ReactiveSwift](https://github.com/ReactiveCocoa/ReactiveSwift)
+
+Notices for 3rd party libraries in this repository are contained in
+`NOTICE.md`.
 
 ## Contributing
 
@@ -102,7 +101,7 @@ We do too, and we’re [hiring](https://www.kickstarter.com/jobs?ref=gh_ios_oss)
 ## License
 
 ```
-Copyright 2016 Kickstarter, PBC.
+Copyright 2019 Kickstarter, PBC.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

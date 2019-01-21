@@ -1,4 +1,4 @@
-import ReactiveCocoa
+import ReactiveSwift
 import ReactiveExtensions
 import Result
 import KsApi
@@ -9,14 +9,14 @@ public protocol CommentsViewModelInputs {
   func commentButtonPressed()
 
   /// Call when the comment dialog has posted a comment.
-  func commentPosted(comment: Comment)
+  func commentPosted(_ comment: Comment)
 
   /// Call when the login button is pressed in the empty state.
   func loginButtonPressed()
 
   /// Call with the project/update that we are viewing comments for. Both can be provided to minimize
   /// the number of API requests made, but it will be assumed we are viewing the comments for the update.
-  func configureWith(project project: Project?, update: Update?)
+  func configureWith(project: Project?, update: Update?)
 
   ///  Call when pull-to-refresh is invoked.
   func refresh()
@@ -28,18 +28,15 @@ public protocol CommentsViewModelInputs {
   func viewDidLoad()
 
   /// Call when a new row is displayed.
-  func willDisplayRow(row: Int, outOf totalRows: Int)
+  func willDisplayRow(_ row: Int, outOf totalRows: Int)
 }
 
 public protocol CommentsViewModelOutputs {
   /// Emits a list of comments that should be displayed.
-  var dataSource: Signal<([Comment], Project, User?), NoError> { get }
+  var dataSource: Signal<([Comment], Project, Update?, User?, Bool), NoError> { get }
 
   /// Emits a boolean that determines if the comment bar button is visible.
   var commentBarButtonVisible: Signal<Bool, NoError> { get }
-
-  /// Emits a project and an update to display the empty state.
-  var emptyStateVisible: Signal<(Project, Update?), NoError> { get }
 
   /// Emits a project and optional update when the comment dialog should be presented.
   var presentPostCommentDialog: Signal<(Project, Update?), NoError> { get }
@@ -62,16 +59,15 @@ public protocol CommentsViewModelType {
 public final class CommentsViewModel: CommentsViewModelType, CommentsViewModelInputs,
 CommentsViewModelOutputs {
 
-  // swiftlint:disable function_body_length
-  public init() {
-    let projectOrUpdate = combineLatest(
-      self.projectAndUpdateProperty.signal.ignoreNil(),
+    public init() {
+    let projectOrUpdate = Signal.combineLatest(
+      self.projectAndUpdateProperty.signal.skipNil(),
       self.viewDidLoadProperty.signal
       )
       .map(first)
       .flatMap { project, update in
         return SignalProducer(value: project.map(Either.left) ?? update.map(Either.right))
-          .ignoreNil()
+          .skipNil()
     }
 
     let initialProject = projectOrUpdate
@@ -87,9 +83,9 @@ CommentsViewModelOutputs {
       .flatMap { AppEnvironment.current.apiService.fetchProject(project: $0).demoteErrors() }
 
     let project = Signal.merge(initialProject, refreshedProjectOnLogin)
-    let update = self.projectAndUpdateProperty.signal.ignoreNil().map { _, update in update }
+    let update = self.projectAndUpdateProperty.signal.skipNil().map { _, update in update }
 
-    let isCloseToBottom = self.willDisplayRowProperty.signal.ignoreNil()
+    let isCloseToBottom = self.willDisplayRowProperty.signal.skipNil()
       .map { row, total in row >= total - 3 }
       .skipRepeats()
       .filter { isClose in isClose }
@@ -119,16 +115,18 @@ CommentsViewModelOutputs {
       },
       requestFromCursor: { AppEnvironment.current.apiService.fetchComments(paginationUrl: $0) })
 
-    self.dataSource = combineLatest(comments, project, user)
-      .skipRepeats { lhs, rhs in lhs.0.isEmpty && rhs.0.isEmpty }
-
     self.commentsAreLoading = isLoading
 
-    self.emptyStateVisible = combineLatest(comments, project, update)
-      .filter { comments, _, _ in comments.isEmpty }
-      .map { _, project, update in (project, update) }
+    let emptyStateFromAPI = Signal.combineLatest(comments, project, update, user)
+      .map { comments, project, update, user in (comments, project, update, user, comments.isEmpty) }
 
-    let userCanComment = combineLatest(comments, project)
+    let emptyStateFromCommentPosted = Signal.combineLatest(comments, project, update, user)
+      .takeWhen(self.commentPostedProperty.signal)
+      .map { comments, projects, update, user in (comments, projects, update, user, false) }
+
+    self.dataSource = Signal.merge(emptyStateFromAPI, emptyStateFromCommentPosted)
+
+    let userCanComment = Signal.combineLatest(comments, project)
       .map { comments, project in !comments.isEmpty && canComment(onProject: project) }
       .skipRepeats()
 
@@ -138,7 +136,7 @@ CommentsViewModelOutputs {
       )
       .skipRepeats()
 
-    self.presentPostCommentDialog = combineLatest(project, update)
+    self.presentPostCommentDialog = Signal.combineLatest(project, update)
       .takeWhen(
         Signal.merge(self.commentButtonPressedProperty.signal, self.userSessionStartedProperty.signal)
       )
@@ -146,79 +144,77 @@ CommentsViewModelOutputs {
     self.openLoginTout = self.loginButtonPressedProperty.signal
     self.closeLoginTout = self.userSessionStartedProperty.signal
 
-    combineLatest(project, update)
+    Signal.combineLatest(project, update)
       .takeWhen(self.viewDidLoadProperty.signal)
-      .take(1)
-      .observeNext { project, update in
+      .take(first: 1)
+      .observeValues { project, update in
         AppEnvironment.current.koala.trackCommentsView(
           project: project, update: update, context: update == nil ? .project : .update
         )
     }
 
-    combineLatest(project, update)
-      .takeWhen(pageCount.skip(1).filter { $0 == 1 })
-      .observeNext { project, update in
+    Signal.combineLatest(project, update)
+      .takeWhen(pageCount.skip(first: 1).filter { $0 == 1 })
+      .observeValues { project, update in
         AppEnvironment.current.koala.trackLoadNewerComments(
           project: project, update: update, context: update == nil ? .project : .update
         )
     }
 
-    combineLatest(project, update)
-      .takePairWhen(pageCount.skip(1).filter { $0 > 1 })
+    Signal.combineLatest(project, update)
+      .takePairWhen(pageCount.skip(first: 1).filter { $0 > 1 })
       .map(unpack)
-      .observeNext { project, update, pageCount in
+      .observeValues { project, update, pageCount in
         AppEnvironment.current.koala.trackLoadOlderComments(
           project: project, update: update, page: pageCount, context: update == nil ? .project : .update
         )
     }
   }
-  // swiftlint:enable function_body_length
 
-  private let commentButtonPressedProperty = MutableProperty()
+  fileprivate let commentButtonPressedProperty = MutableProperty(())
   public func commentButtonPressed() {
     self.commentButtonPressedProperty.value = ()
   }
 
-  private let commentPostedProperty = MutableProperty<Comment?>(nil)
-  public func commentPosted(comment: Comment) {
+  fileprivate let commentPostedProperty = MutableProperty<Comment?>(nil)
+  public func commentPosted(_ comment: Comment) {
     self.commentPostedProperty.value = comment
   }
 
-  private let loginButtonPressedProperty = MutableProperty()
+  fileprivate let loginButtonPressedProperty = MutableProperty(())
   public func loginButtonPressed() {
     self.loginButtonPressedProperty.value = ()
   }
 
-  private let projectAndUpdateProperty = MutableProperty<(Project?, Update?)?>(nil)
-  public func configureWith(project project: Project?, update: Update?) {
+  fileprivate let projectAndUpdateProperty = MutableProperty<(Project?, Update?)?>(nil)
+  public func configureWith(project: Project?, update: Update?) {
     self.projectAndUpdateProperty.value = (project, update)
   }
 
-  private let refreshProperty = MutableProperty()
+  fileprivate let refreshProperty = MutableProperty(())
   public func refresh() {
     self.refreshProperty.value = ()
   }
 
-  private let userSessionStartedProperty = MutableProperty()
+  fileprivate let userSessionStartedProperty = MutableProperty(())
   public func userSessionStarted() {
     self.userSessionStartedProperty.value = ()
   }
 
-  private let viewDidLoadProperty = MutableProperty()
+  fileprivate let viewDidLoadProperty = MutableProperty(())
   public func viewDidLoad() {
     self.viewDidLoadProperty.value = ()
   }
 
-  private let willDisplayRowProperty = MutableProperty<(row: Int, total: Int)?>(nil)
-  public func willDisplayRow(row: Int, outOf totalRows: Int) {
+  fileprivate let willDisplayRowProperty = MutableProperty<(row: Int, total: Int)?>(nil)
+  public func willDisplayRow(_ row: Int, outOf totalRows: Int) {
     self.willDisplayRowProperty.value = (row, totalRows)
   }
 
   public let closeLoginTout: Signal<(), NoError>
   public let commentBarButtonVisible: Signal<Bool, NoError>
   public let commentsAreLoading: Signal<Bool, NoError>
-  public let dataSource: Signal<([Comment], Project, User?), NoError>
-  public var emptyStateVisible: Signal<(Project, Update?), NoError>
+  public let dataSource: Signal<([Comment], Project, Update?, User?, Bool), NoError>
   public let openLoginTout: Signal<(), NoError>
   public let presentPostCommentDialog: Signal<(Project, Update?), NoError>
 

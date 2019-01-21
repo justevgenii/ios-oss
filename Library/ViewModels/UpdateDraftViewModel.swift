@@ -1,19 +1,18 @@
-// swiftlint:disable file_length
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import Result
 import UIKit
 
 public protocol UpdateDraftViewModelInputs {
   /// Call when the creator taps "add attachment".
-  func addAttachmentButtonTapped(availableSources availableSources: [AttachmentSource])
+  func addAttachmentButtonTapped(availableSources: [AttachmentSource])
 
   /// Call when the creator taps a selection from the attachment actions sheet.
-  func addAttachmentSheetButtonTapped(action: AttachmentSource)
+  func addAttachmentSheetButtonTapped(_ action: AttachmentSource)
 
   /// Call when a creator taps an attachment to be removed.
-  func attachmentTapped(id id: Int)
+  func attachmentTapped(id: Int)
 
   /// Call when the draft body changes.
   func bodyTextChanged(to body: String)
@@ -22,22 +21,22 @@ public protocol UpdateDraftViewModelInputs {
   func closeButtonTapped()
 
   /// Call with the project provided to the view.
-  func configureWith(project project: Project)
+  func configureWith(project: Project)
 
   /// Call with the image picked by the image picker.
-  func imagePicked(url url: NSURL, fromSource source: AttachmentSource)
+  func imagePicked(url: URL, fromSource source: AttachmentSource)
 
   /// Call when the image picker is canceled.
   func imagePickerCanceled()
 
   /// Call when the creator taps "public"/"backers only".
-  func isBackersOnlyOn(isBackersOnly: Bool)
+  func isBackersOnlyOn(_ isBackersOnly: Bool)
 
   /// Call when the creator taps "preview".
   func previewButtonTapped()
 
   /// Call when attachment removal confirmed.
-  func remove(attachment attachment: UpdateDraft.Attachment)
+  func remove(attachment: UpdateDraft.Attachment)
 
   /// Call when the creator cancels out of the remove attachment flow.
   func removeAttachmentConfirmationCanceled()
@@ -133,23 +132,25 @@ public protocol UpdateDraftViewModelType {
 
 public final class UpdateDraftViewModel: UpdateDraftViewModelType, UpdateDraftViewModelInputs,
 UpdateDraftViewModelOutputs {
-  // swiftlint:disable function_body_length
-  public init() {
+    public init() {
     // MARK: Loading
 
-    let project = self.projectProperty.signal.ignoreNil()
-    let draftEvent = combineLatest(self.viewDidLoadProperty.signal, project)
+    let project: Signal<Project, NoError> = self.projectProperty.signal.skipNil()
+
+    let draftEvent =
+      Signal.combineLatest(self.viewDidLoadProperty.signal, project)
       .map(second)
       .flatMap {
         AppEnvironment.current.apiService.fetchUpdateDraft(forProject: $0)
           .materialize()
-          .delay(AppEnvironment.current.apiDelayInterval, onScheduler: AppEnvironment.current.scheduler)
+          .ksr_delay(AppEnvironment.current.apiDelayInterval, on: AppEnvironment.current.scheduler)
     }
-    let draft = draftEvent.values()
+
+    let draft: Signal<UpdateDraft, NoError> = draftEvent.values()
 
     self.showLoadFailure = draftEvent.errors().ignoreValues()
 
-    self.isLoading = .merge(
+    self.isLoading = Signal.merge(
       self.viewDidLoadProperty.signal.mapConst(true),
       draft.mapConst(false)
     )
@@ -164,15 +165,16 @@ UpdateDraftViewModelOutputs {
     self.title = draft.map { $0.update.title }
     self.body = draft.map { $0.update.body ?? "" }
 
-    let wasBackersOnly = draft.map { $0.update.isPublic }.map(negate)
+    let wasBackersOnly: Signal<Bool, NoError> = draft.map { $0.update.isPublic }.map(negate)
+
     self.isBackersOnly = Signal.merge(wasBackersOnly, self.isBackersOnlyOnProperty.signal)
 
-    let currentTitle = Signal.merge(self.title, self.titleTextChangedProperty.signal)
-    let currentBody = Signal.merge(self.body, self.bodyTextChangedProperty.signal)
+    let currentTitle: Signal<String, NoError> = Signal.merge(self.title, self.titleTextChangedProperty.signal)
+    let currentBody: Signal<String, NoError> = Signal.merge(self.body, self.bodyTextChangedProperty.signal)
 
-    let titleChanged = hasChanged(self.title, currentTitle)
-    let bodyChanged = hasChanged(self.body, currentBody)
-    let isBackersOnlyChanged = hasChanged(wasBackersOnly, self.isBackersOnly)
+    let titleChanged: Signal<Bool, NoError> = hasChanged(self.title, currentTitle)
+    let bodyChanged: Signal<Bool, NoError> = hasChanged(self.body, currentBody)
+    let isBackersOnlyChanged: Signal<Bool, NoError> = hasChanged(wasBackersOnly, self.isBackersOnly)
 
     // MARK: Attachments
 
@@ -185,21 +187,22 @@ UpdateDraftViewModelOutputs {
     self.showAttachmentActions = self.addAttachmentButtonTappedProperty.signal
 
     self.showImagePicker = self.addAttachmentSheetButtonTappedProperty.signal
-      .ignoreNil()
+      .skipNil()
 
     let addAttachmentEvent = draft
-      .takePairWhen(self.imagePickedProperty.signal.ignoreNil().map(first))
+      .takePairWhen(self.imagePickedProperty.signal.skipNil().map(first))
       .switchMap { draft, url in
-        AppEnvironment.current.apiService.addImage(file: url, toDraft: draft)
+        return AppEnvironment.current.apiService.addImage(file: url, toDraft: draft)
           .materialize()
-          .delay(AppEnvironment.current.apiDelayInterval, onScheduler: AppEnvironment.current.scheduler)
+          .ksr_delay(AppEnvironment.current.apiDelayInterval, on: AppEnvironment.current.scheduler)
     }
+
     self.showAddAttachmentFailure = addAttachmentEvent.errors().ignoreValues()
 
     self.attachmentAdded = addAttachmentEvent.values()
       .map(UpdateDraft.Attachment.image)
 
-    let addedAttachments = Signal
+    let addedAttachments: Signal<[UpdateDraft.Attachment], NoError> = Signal
       .merge(
         self.attachments,
         self.attachments
@@ -212,22 +215,24 @@ UpdateDraftViewModelOutputs {
     self.showRemoveAttachmentConfirmation = addedAttachments
       .takePairWhen(self.attachmentTappedProperty.signal)
       .map { attachments, id in attachments.filter { $0.id == id }.first }
-      .ignoreNil()
+      .skipNil()
 
-    let removeAttachmentEvent = draft
-      .takePairWhen(self.removeAttachmentProperty.signal.ignoreNil())
-      .switchMap { (draft, attachment) -> SignalProducer<Event<UpdateDraft.Image, ErrorEnvelope>, NoError> in
+    let removeAttachmentEvent: Signal<Signal<UpdateDraft.Image, ErrorEnvelope>.Event, NoError> = draft
+      .takePairWhen(self.removeAttachmentProperty.signal.skipNil())
+      .switchMap { (draft, attachment)
+        -> SignalProducer<Signal<UpdateDraft.Image, ErrorEnvelope>.Event, NoError> in
         guard case let .image(image) = attachment else { fatalError("Video not supported") }
         return AppEnvironment.current.apiService.delete(image: image, fromDraft: draft)
           .materialize()
-          .delay(AppEnvironment.current.apiDelayInterval, onScheduler: AppEnvironment.current.scheduler)
+          .ksr_delay(AppEnvironment.current.apiDelayInterval, on: AppEnvironment.current.scheduler)
     }
+
     self.showRemoveAttachmentFailure = removeAttachmentEvent.errors().ignoreValues()
 
     self.attachmentRemoved = removeAttachmentEvent.values()
       .map(UpdateDraft.Attachment.image)
 
-    let removedAttachments = addedAttachments
+      let removedAttachments: Signal<[UpdateDraft.Attachment], NoError> = addedAttachments
       .switchMap { [attachmentRemoved] attachments in
         attachmentRemoved
           .scan(attachments) { currentAttachments, toRemove in
@@ -235,7 +240,7 @@ UpdateDraftViewModelOutputs {
         }
     }
 
-    let currentAttachments = Signal
+    let currentAttachments: Signal<[UpdateDraft.Attachment], NoError> = Signal
       .merge(
         self.attachments,
         addedAttachments,
@@ -251,7 +256,7 @@ UpdateDraftViewModelOutputs {
 
     // MARK: Validation
 
-    let hasContent = combineLatest(currentTitle, currentBody, self.attachments)
+    let hasContent: Signal<Bool, NoError> = Signal.combineLatest(currentTitle, currentBody, self.attachments)
       .map { title, body, attachments in
         !title.trimmed().isEmpty && (!body.trimmed().isEmpty || !attachments.isEmpty)
     }
@@ -265,10 +270,10 @@ UpdateDraftViewModelOutputs {
 
     // MARK: Focus
 
-    let draftHasTitle = draft
+    let draftHasTitle: Signal<Bool, NoError> = draft
       .map { !$0.update.title.isEmpty }
 
-    let draftHasBody = draft
+    let draftHasBody: Signal<Bool, NoError> = draft
       .map { !($0.update.body ?? "").isEmpty }
 
     self.titleTextFieldBecomeFirstResponder = draftHasTitle
@@ -281,7 +286,7 @@ UpdateDraftViewModelOutputs {
 
     self.bodyTextViewBecomeFirstResponder = .merge(
       self.titleTextFieldDoneEditingProperty.signal,
-      combineLatest(
+      Signal.combineLatest(
         draftHasTitle.filter(isTrue),
         draftHasBody.filter(isFalse)
       )
@@ -290,12 +295,12 @@ UpdateDraftViewModelOutputs {
 
     // MARK: Saving
 
-    let saveAction = Signal.merge(
+    let saveAction: Signal<SaveAction, NoError> = Signal.merge(
       self.closeButtonTappedProperty.signal.mapConst(SaveAction.dismiss),
       self.previewButtonTappedProperty.signal.mapConst(SaveAction.preview)
     )
 
-    let currentDraftEvent = combineLatest(
+    let currentDraftEvent = Signal.combineLatest(
       draft,
       currentTitle,
       currentBody,
@@ -303,16 +308,16 @@ UpdateDraftViewModelOutputs {
       )
       .takeWhen(saveAction)
       .flatMap { (draft, title, body, isBackersOnly) ->
-        SignalProducer<Event<UpdateDraft, ErrorEnvelope>, NoError> in
+        SignalProducer<Signal<UpdateDraft, ErrorEnvelope>.Event, NoError> in
 
         let unchanged = draft.update.title == title
           && draft.update.body == body
           && draft.update.isPublic == !isBackersOnly
 
-        let producer: SignalProducer<Event<UpdateDraft, ErrorEnvelope>, NoError>
+        let producer: SignalProducer<Signal<UpdateDraft, ErrorEnvelope>.Event, NoError>
 
         if unchanged {
-          producer = SignalProducer(value: .Next(draft))
+          producer = SignalProducer(value: .value(draft))
         } else {
           producer = AppEnvironment.current.apiService
             .update(draft: draft, title: title, body: body, isPublic: !isBackersOnly)
@@ -320,7 +325,7 @@ UpdateDraftViewModelOutputs {
         }
 
         return producer
-          .delay(AppEnvironment.current.apiDelayInterval, onScheduler: AppEnvironment.current.scheduler)
+          .ksr_delay(AppEnvironment.current.apiDelayInterval, on: AppEnvironment.current.scheduler)
       }
     let currentDraft = currentDraftEvent.values()
 
@@ -343,15 +348,15 @@ UpdateDraftViewModelOutputs {
     // MARK: Koala
 
     project
-      .observeNext { AppEnvironment.current.koala.trackViewedUpdateDraft(forProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackViewedUpdateDraft(forProject: $0) }
 
     project
       .takeWhen(self.notifyPresenterViewControllerWantsDismissal)
-      .observeNext { AppEnvironment.current.koala.trackClosedUpdateDraft(forProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackClosedUpdateDraft(forProject: $0) }
 
     project
       .takeWhen(self.goToPreview)
-      .observeNext { AppEnvironment.current.koala.trackPreviewedUpdate(forProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackPreviewedUpdate(forProject: $0) }
 
     let titleSynced = titleChanged
       .takeWhen(currentDraft)
@@ -359,7 +364,7 @@ UpdateDraftViewModelOutputs {
 
     project
       .takeWhen(titleSynced)
-      .observeNext { AppEnvironment.current.koala.trackEditedUpdateDraftTitle(forProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackEditedUpdateDraftTitle(forProject: $0) }
 
     let bodySynced = bodyChanged
       .takeWhen(currentDraft)
@@ -367,145 +372,145 @@ UpdateDraftViewModelOutputs {
 
     project
       .takeWhen(bodySynced)
-      .observeNext { AppEnvironment.current.koala.trackEditedUpdateDraftBody(forProject: $0) }
+      .observeValues { AppEnvironment.current.koala.trackEditedUpdateDraftBody(forProject: $0) }
 
     let isBackersOnlySynced = isBackersOnlyChanged
       .takeWhen(currentDraft)
       .filter(isTrue)
 
-    combineLatest(project, self.isBackersOnly)
+    Signal.combineLatest(project, self.isBackersOnly)
       .takeWhen(isBackersOnlySynced)
-      .observeNext {
+      .observeValues {
         AppEnvironment.current.koala.trackChangedUpdateDraftVisibility(forProject: $0, isPublic: !$1)
     }
 
     project
       .takeWhen(self.addAttachmentSheetButtonTappedProperty.signal)
-      .observeNext {
+      .observeValues {
         AppEnvironment.current.koala.trackStartedAddUpdateDraftAttachment(forProject: $0)
     }
 
-    combineLatest(project, self.imagePickedProperty.signal.ignoreNil().map(second))
+    Signal.combineLatest(project, self.imagePickedProperty.signal.skipNil().map(second))
       .takeWhen(self.attachmentAdded)
-      .observeNext {
+      .observeValues {
         AppEnvironment.current.koala.trackCompletedAddUpdateDraftAttachment(forProject: $0, attachedFrom: $1)
     }
 
     project
       .takeWhen(self.imagePickerCanceledProperty.signal)
-      .observeNext {
+      .observeValues {
         AppEnvironment.current.koala.trackCanceledAddUpdateDraftAttachment(forProject: $0)
     }
 
     project
       .takeWhen(self.showAddAttachmentFailure)
-      .observeNext {
+      .observeValues {
         AppEnvironment.current.koala.trackFailedAddUpdateDraftAttachment(forProject: $0)
     }
 
     project
       .takeWhen(self.attachmentTappedProperty.signal)
-      .observeNext {
+      .observeValues {
         AppEnvironment.current.koala.trackStartedRemoveUpdateDraftAttachment(forProject: $0)
     }
 
     project
       .takeWhen(self.attachmentRemoved)
-      .observeNext {
+      .observeValues {
         AppEnvironment.current.koala.trackCompletedRemoveUpdateDraftAttachment(forProject: $0)
     }
 
     project
       .takeWhen(self.removeAttachmentConfirmationCanceledProperty.signal)
-      .observeNext {
+      .observeValues {
         AppEnvironment.current.koala.trackCanceledRemoveUpdateDraftAttachment(forProject: $0)
     }
 
     project
       .takeWhen(self.showRemoveAttachmentFailure)
-      .observeNext {
+      .observeValues {
         AppEnvironment.current.koala.trackFailedRemoveUpdateDraftAttachment(forProject: $0)
     }
   }
   // swiftlint:enable function_body_length
 
   // INPUTS
-  private let addAttachmentButtonTappedProperty = MutableProperty<[AttachmentSource]>([])
-  public func addAttachmentButtonTapped(availableSources availableSources: [AttachmentSource]) {
+  fileprivate let addAttachmentButtonTappedProperty = MutableProperty<[AttachmentSource]>([])
+  public func addAttachmentButtonTapped(availableSources: [AttachmentSource]) {
     self.addAttachmentButtonTappedProperty.value = availableSources
   }
 
-  private let addAttachmentSheetButtonTappedProperty = MutableProperty<AttachmentSource?>(nil)
-  public func addAttachmentSheetButtonTapped(action: AttachmentSource) {
+  fileprivate let addAttachmentSheetButtonTappedProperty = MutableProperty<AttachmentSource?>(nil)
+  public func addAttachmentSheetButtonTapped(_ action: AttachmentSource) {
     self.addAttachmentSheetButtonTappedProperty.value = action
   }
 
-  private let attachmentTappedProperty = MutableProperty(0)
-  public func attachmentTapped(id id: Int) {
+  fileprivate let attachmentTappedProperty = MutableProperty(0)
+  public func attachmentTapped(id: Int) {
     self.attachmentTappedProperty.value = id
   }
 
-  private let bodyTextChangedProperty = MutableProperty("")
+  fileprivate let bodyTextChangedProperty = MutableProperty("")
   public func bodyTextChanged(to body: String) {
     self.bodyTextChangedProperty.value = body
   }
 
-  private let closeButtonTappedProperty = MutableProperty()
+  fileprivate let closeButtonTappedProperty = MutableProperty(())
   public func closeButtonTapped() {
     self.closeButtonTappedProperty.value = ()
   }
 
-  private let projectProperty = MutableProperty<Project?>(nil)
-  public func configureWith(project project: Project) {
+  fileprivate let projectProperty = MutableProperty<Project?>(nil)
+  public func configureWith(project: Project) {
     self.projectProperty.value = project
   }
 
-  private let imagePickedProperty = MutableProperty<(NSURL, AttachmentSource)?>(nil)
-  public func imagePicked(url url: NSURL, fromSource source: AttachmentSource) {
+  fileprivate let imagePickedProperty = MutableProperty<(URL, AttachmentSource)?>(nil)
+  public func imagePicked(url: URL, fromSource source: AttachmentSource) {
     self.imagePickedProperty.value = (url, source)
   }
 
-  private let imagePickerCanceledProperty = MutableProperty()
+  fileprivate let imagePickerCanceledProperty = MutableProperty(())
   public func imagePickerCanceled() {
     self.imagePickerCanceledProperty.value = ()
   }
 
-  private let isBackersOnlyOnProperty = MutableProperty(false)
-  public func isBackersOnlyOn(isBackersOnly: Bool) {
+  fileprivate let isBackersOnlyOnProperty = MutableProperty(false)
+  public func isBackersOnlyOn(_ isBackersOnly: Bool) {
     self.isBackersOnlyOnProperty.value = isBackersOnly
   }
 
-  private let previewButtonTappedProperty = MutableProperty()
+  fileprivate let previewButtonTappedProperty = MutableProperty(())
   public func previewButtonTapped() {
     self.previewButtonTappedProperty.value = ()
   }
 
-  private let removeAttachmentProperty = MutableProperty<UpdateDraft.Attachment?>(nil)
-  public func remove(attachment attachment: UpdateDraft.Attachment) {
+  fileprivate let removeAttachmentProperty = MutableProperty<UpdateDraft.Attachment?>(nil)
+  public func remove(attachment: UpdateDraft.Attachment) {
     self.removeAttachmentProperty.value = attachment
   }
 
-  private let removeAttachmentConfirmationCanceledProperty = MutableProperty()
+  fileprivate let removeAttachmentConfirmationCanceledProperty = MutableProperty(())
   public func removeAttachmentConfirmationCanceled() {
     self.removeAttachmentConfirmationCanceledProperty.value = ()
   }
 
-  private let titleTextChangedProperty = MutableProperty("")
+  fileprivate let titleTextChangedProperty = MutableProperty("")
   public func titleTextChanged(to title: String) {
     self.titleTextChangedProperty.value = title
   }
 
-  private let titleTextFieldDoneEditingProperty = MutableProperty()
+  fileprivate let titleTextFieldDoneEditingProperty = MutableProperty(())
   public func titleTextFieldDoneEditing() {
     self.titleTextFieldDoneEditingProperty.value = ()
   }
 
-  private let viewDidLoadProperty = MutableProperty()
+  fileprivate let viewDidLoadProperty = MutableProperty(())
   public func viewDidLoad() {
     self.viewDidLoadProperty.value = ()
   }
 
-  private let viewWillDisappearProperty = MutableProperty()
+  fileprivate let viewWillDisappearProperty = MutableProperty(())
   public func viewWillDisappear() {
     self.viewWillDisappearProperty.value = ()
   }
@@ -543,11 +548,11 @@ public enum AttachmentSource: String {
   case camera = "camera"
   case cameraRoll = "camera_roll"
 
-  public init(sourceType: UIImagePickerControllerSourceType) {
+  public init(sourceType: UIImagePickerController.SourceType) {
     switch sourceType {
-    case .Camera:
+    case .camera:
       self = .camera
-    case .PhotoLibrary:
+    case .photoLibrary:
       self = .cameraRoll
     default:
       fatalError("unsupported source: \(sourceType)")
@@ -563,12 +568,12 @@ public enum AttachmentSource: String {
     }
   }
 
-  public var sourceType: UIImagePickerControllerSourceType {
+  public var sourceType: UIImagePickerController.SourceType {
     switch self {
     case .camera:
-      return .Camera
+      return .camera
     case .cameraRoll:
-      return .PhotoLibrary
+      return .photoLibrary
     }
   }
 }
@@ -588,13 +593,13 @@ private enum SaveAction {
   case preview
 }
 
-private func hasChanged<T: Equatable>(original: Signal<T, NoError>, _ updated: Signal<T, NoError>)
+private func hasChanged<T: Equatable>(_ original: Signal<T, NoError>, _ updated: Signal<T, NoError>)
   -> Signal<Bool, NoError> {
 
     return Signal
       .merge(
         original.mapConst(false),
-        combineLatest(original, updated)
+        Signal.combineLatest(original, updated)
           .map(!=)
       )
       .skipRepeats()

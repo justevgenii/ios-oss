@@ -5,62 +5,61 @@ import UIKit
 
 internal final class NoRewardCell: UITableViewCell, ValueCell {
 
-  @IBOutlet private weak var cardView: UIView!
-  @IBOutlet private weak var pledgeButton: UIButton!
-  @IBOutlet private weak var pledgeTitleLabel: UILabel!
-  @IBOutlet private weak var pledgeSubtitleLabel: UILabel!
-  @IBOutlet private weak var rootStackView: UIStackView!
-  @IBOutlet private weak var copyStackView: UIStackView!
+  @IBOutlet fileprivate weak var cardView: UIView!
+  @IBOutlet fileprivate weak var pledgeButton: UIButton!
+  @IBOutlet fileprivate weak var pledgeTitleLabel: UILabel!
+  @IBOutlet fileprivate weak var pledgeSubtitleLabel: UILabel!
+  @IBOutlet fileprivate weak var rootStackView: UIStackView!
+  @IBOutlet fileprivate weak var copyStackView: UIStackView!
 
-  internal func configureWith(value project: Project) {
-    self.contentView.backgroundColor = Library.backgroundColor(forCategoryId: project.category.rootId)
-  }
+  // value required to bind value to data source
+  internal func configureWith(value: Project) {}
 
-  // swiftlint:disable function_body_length
   internal override func bindStyles() {
     super.bindStyles()
 
-    self
+    _ = self
       |> baseTableViewCellStyle()
-      |> NoRewardCell.lens.accessibilityTraits .~ UIAccessibilityTraitButton
-      |> (NoRewardCell.lens.contentView • UIView.lens.layoutMargins) %~~ { _, cell in
+      |> NoRewardCell.lens.accessibilityTraits .~ UIAccessibilityTraits.button.rawValue
+      |> (NoRewardCell.lens.contentView..UIView.lens.layoutMargins) %~~ { _, cell in
         cell.traitCollection.isRegularRegular
           ? .init(top: Styles.grid(1), left: Styles.grid(16), bottom: Styles.grid(2), right: Styles.grid(16))
           : .init(top: Styles.grid(1), left: Styles.grid(2), bottom: Styles.grid(2), right: Styles.grid(2))
-    }
+      }
+      |> NoRewardCell.lens.contentView..UIView.lens.backgroundColor .~ projectCellBackgroundColor()
 
-    self.cardView
-      |> dropShadowStyle()
-      |> UIView.lens.backgroundColor .~ .whiteColor()
+    _ = self.cardView
+      |> darkCardStyle(cornerRadius: 0)
+      |> UIView.lens.backgroundColor .~ .white
 
-    self.pledgeButton
+    _ = self.pledgeButton
       |> greenButtonStyle
-      |> UIButton.lens.userInteractionEnabled .~ false
-      |> UIButton.lens.title(forState: .Normal) %~ { _ in Strings.Pledge_without_a_reward() }
+      |> UIButton.lens.layer.cornerRadius .~ 0
+      |> UIButton.lens.isUserInteractionEnabled .~ false
+      |> UIButton.lens.title(for: .normal) %~ { _ in Strings.Pledge_without_a_reward() }
       |> UIButton.lens.isAccessibilityElement .~ false
       |> UIButton.lens.accessibilityElementsHidden .~ true
 
-    self.pledgeSubtitleLabel
-      |> UILabel.lens.textColor .~ .ksr_text_navy_500
+    _ = self.pledgeSubtitleLabel
+      |> UILabel.lens.textColor .~ .ksr_text_dark_grey_400
       |> UILabel.lens.font .~ .ksr_body(size: 13)
       |> UILabel.lens.text %~ { _ in Strings.Pledge_any_amount_to_help_bring_this_project_to_life() }
 
-    self.pledgeTitleLabel
-      |> UILabel.lens.textColor .~ .ksr_text_navy_700
+    _ = self.pledgeTitleLabel
+      |> UILabel.lens.textColor .~ .ksr_soft_black
       |> UILabel.lens.font .~ .ksr_title3(size: 16)
       |> UILabel.lens.text %~ { _ in Strings.Make_a_pledge_without_a_reward() }
       |> UILabel.lens.numberOfLines .~ 0
 
-    self.rootStackView
+    _ = self.rootStackView
       |> UIStackView.lens.spacing .~ Styles.grid(3)
       |> UIStackView.lens.layoutMargins .~
         .init(top: Styles.grid(4), left: Styles.grid(2), bottom: Styles.grid(2), right: Styles.grid(2))
-      |> UIStackView.lens.layoutMarginsRelativeArrangement .~ true
+      |> UIStackView.lens.isLayoutMarginsRelativeArrangement .~ true
 
-    self.copyStackView
+    _ = self.copyStackView
       |> UIStackView.lens.spacing .~ Styles.grid(3)
       |> UIStackView.lens.layoutMargins .~ .init(topBottom: 0, leftRight: Styles.grid(2))
-      |> UIStackView.lens.layoutMarginsRelativeArrangement .~ true
+      |> UIStackView.lens.isLayoutMarginsRelativeArrangement .~ true
   }
-  // swiftlint:enable function_body_length
 }

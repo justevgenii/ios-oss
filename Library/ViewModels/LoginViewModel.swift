@@ -1,21 +1,21 @@
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import ReactiveExtensions
 import Result
 
 public protocol LoginViewModelInputs {
 
   /// String value of email textfield text
-  func emailChanged(email: String?)
+  func emailChanged(_ email: String?)
 
-  /// Call when email textfield keyboard returns
+  /// Call when email textfield keyboard returns.
   func emailTextFieldDoneEditing()
 
-  /// Call when the environment has been logged into
+  /// Call when the environment has been logged into.
   func environmentLoggedIn()
 
-  /// Call when login button is pressed
+  /// Call when login button is pressed.
   func loginButtonPressed()
 
   /// Call with onepassword's available ability.
@@ -25,16 +25,19 @@ public protocol LoginViewModelInputs {
   func onePasswordButtonTapped()
 
   /// Call when onepassword finds a login.
-  func onePasswordFoundLogin(email email: String?, password: String?)
+  func onePasswordFoundLogin(email: String?, password: String?)
 
   /// String value of password textfield text
-  func passwordChanged(password: String?)
+  func passwordChanged(_ password: String?)
 
-  /// Call when password textfield keyboard returns
+  /// Call when password textfield keyboard returns.
   func passwordTextFieldDoneEditing()
 
-  /// Call when reset password button is pressed
+  /// Call when reset password button is pressed.
   func resetPasswordButtonPressed()
+
+  /// Call when the show/hide password button is pressed.
+  func showHidePasswordButtonTapped()
 
   /// Call when the view did load.
   func viewDidLoad()
@@ -60,7 +63,7 @@ public protocol LoginViewModelOutputs {
   var logIntoEnvironment: Signal<AccessTokenEnvelope, NoError> { get }
 
   /// Emits a boolean that determines if the onepassword button should be hidden or not.
-  var onePasswordButtonHidden: Signal<Bool, NoError> { get }
+  var onePasswordButtonIsHidden: Signal<Bool, NoError> { get }
 
   /// Emits when we should request from the onepassword extension a login.
   var onePasswordFindLoginForURLString: Signal<String, NoError> { get }
@@ -72,13 +75,16 @@ public protocol LoginViewModelOutputs {
   var passwordTextFieldBecomeFirstResponder: Signal<(), NoError> { get }
 
   /// Emits when a login success notification should be posted.
-  var postNotification: Signal<NSNotification, NoError> { get }
+  var postNotification: Signal<(Notification, Notification), NoError> { get }
 
   /// Emits when a login error has occurred and a message should be displayed.
   var showError: Signal<String, NoError> { get }
 
   /// Emits when the reset password screen should be shown
   var showResetPassword: Signal<(), NoError> { get }
+
+  // Emits when the show/hide password button is toggled
+  var showHidePasswordButtonToggled: Signal<Bool, NoError> { get }
 
   /// Emits when TFA is required for login.
   var tfaChallenge: Signal<(email: String, password: String), NoError> { get }
@@ -91,22 +97,24 @@ public protocol LoginViewModelType {
 
 public final class LoginViewModel: LoginViewModelType, LoginViewModelInputs, LoginViewModelOutputs {
 
-  // swiftlint:disable function_body_length
-  public init() {
-    let emailAndPassword = combineLatest(
-      .merge(self.emailChangedProperty.signal.ignoreNil(), self.prefillEmailProperty.signal.ignoreNil()),
-      .merge(self.passwordChangedProperty.signal.ignoreNil(), self.prefillPasswordProperty.signal.ignoreNil())
+    public init() {
+    let emailAndPassword = Signal.combineLatest(
+      .merge(self.emailChangedProperty.signal.skipNil(), self.prefillEmailProperty.signal.skipNil()),
+      .merge(self.passwordChangedProperty.signal.skipNil(), self.prefillPasswordProperty.signal.skipNil())
     )
 
     self.emailTextFieldBecomeFirstResponder = self.viewDidLoadProperty.signal
 
-    self.isFormValid = self.viewWillAppearProperty.signal.mapConst(false).take(1)
+    self.isFormValid = self.viewWillAppearProperty.signal.mapConst(false).take(first: 1)
       .mergeWith(emailAndPassword.map(isValid))
 
     let tryLogin = Signal.merge(
       self.loginButtonPressedProperty.signal,
       self.passwordTextFieldDoneEditingProperty.signal,
-      combineLatest(self.prefillEmailProperty.signal, self.prefillPasswordProperty.signal).ignoreValues()
+      Signal.combineLatest(
+        self.prefillEmailProperty.signal,
+        self.prefillPasswordProperty.signal
+        ).ignoreValues()
     )
 
     let loginEvent = emailAndPassword
@@ -124,9 +132,15 @@ public final class LoginViewModel: LoginViewModelType, LoginViewModelInputs, Log
 
     self.tfaChallenge = emailAndPassword
       .takeWhen(tfaError)
+      .map { (email: $0, password: $1) }
 
     self.postNotification = self.environmentLoggedInProperty.signal
-      .mapConst(NSNotification(name: CurrentUserNotifications.sessionStarted, object: nil))
+      .mapConst(
+        (Notification(name: .ksr_sessionStarted),
+         Notification(name: .ksr_showNotificationsDialog,
+                      userInfo: [UserInfoKeys.context: PushNotificationDialog.Context.login]))
+      )
+
     self.dismissKeyboard = self.passwordTextFieldDoneEditingProperty.signal
     self.passwordTextFieldBecomeFirstResponder = self.emailTextFieldDoneEditingProperty.signal
 
@@ -138,78 +152,86 @@ public final class LoginViewModel: LoginViewModelType, LoginViewModelInputs, Log
 
     self.showResetPassword = self.resetPasswordPressedProperty.signal
 
-    self.onePasswordButtonHidden = self.onePasswordIsAvailable.signal.map(negate)
+    self.onePasswordButtonIsHidden = self.onePasswordIsAvailableProperty.signal.map(negate)
+      .map(is1PasswordButtonHidden)
 
     self.onePasswordFindLoginForURLString = self.onePasswordButtonTappedProperty.signal
-      .map { optionalize(AppEnvironment.current.apiService.serverConfig.webBaseUrl.absoluteString) }
-      .ignoreNil()
+      .map { AppEnvironment.current.apiService.serverConfig.webBaseUrl.absoluteString }
 
-    self.emailText = self.prefillEmailProperty.signal.ignoreNil()
-    self.passwordText = self.prefillPasswordProperty.signal.ignoreNil()
+    self.emailText = self.prefillEmailProperty.signal.skipNil()
+    self.passwordText = self.prefillPasswordProperty.signal.skipNil()
 
-    combineLatest(self.emailText, self.passwordText)
-      .observeNext { _ in AppEnvironment.current.koala.trackAttemptingOnePasswordLogin() }
+    Signal.combineLatest(self.emailText, self.passwordText)
+      .observeValues { _ in AppEnvironment.current.koala.trackAttemptingOnePasswordLogin() }
 
-    self.onePasswordIsAvailable.signal
-      .observeNext { AppEnvironment.current.koala.trackLoginFormView(onePasswordIsAvailable: $0) }
+    self.onePasswordIsAvailableProperty.signal
+      .observeValues { AppEnvironment.current.koala.trackLoginFormView(onePasswordIsAvailable: $0) }
 
     self.logIntoEnvironment
-      .observeNext { _ in AppEnvironment.current.koala.trackLoginSuccess(authType: Koala.AuthType.email) }
+      .observeValues { _ in AppEnvironment.current.koala.trackLoginSuccess(authType: Koala.AuthType.email) }
+
+    self.showHidePasswordButtonToggled = self.shouldShowPasswordProperty.signal
 
     self.showError
-      .observeNext { _ in AppEnvironment.current.koala.trackLoginError(authType: Koala.AuthType.email) }
+      .observeValues { _ in AppEnvironment.current.koala.trackLoginError(authType: Koala.AuthType.email) }
   }
 
   public var inputs: LoginViewModelInputs { return self }
   public var outputs: LoginViewModelOutputs { return self }
 
-  private let viewWillAppearProperty = MutableProperty(())
+  fileprivate let viewWillAppearProperty = MutableProperty(())
   public func viewWillAppear() {
     self.viewWillAppearProperty.value = ()
   }
-  private let emailChangedProperty = MutableProperty<String?>(nil)
-  public func emailChanged(email: String?) {
+  fileprivate let emailChangedProperty = MutableProperty<String?>(nil)
+  public func emailChanged(_ email: String?) {
     self.emailChangedProperty.value = email
   }
-  private let passwordChangedProperty = MutableProperty<String?>(nil)
-  public func passwordChanged(password: String?) {
+  fileprivate let passwordChangedProperty = MutableProperty<String?>(nil)
+  public func passwordChanged(_ password: String?) {
     self.passwordChangedProperty.value = password
   }
-  private let loginButtonPressedProperty = MutableProperty(())
+  fileprivate let loginButtonPressedProperty = MutableProperty(())
   public func loginButtonPressed() {
     self.loginButtonPressedProperty.value = ()
   }
-  private let onePasswordButtonTappedProperty = MutableProperty()
+  fileprivate let onePasswordButtonTappedProperty = MutableProperty(())
   public func onePasswordButtonTapped() {
     self.onePasswordButtonTappedProperty.value = ()
   }
-  private let prefillEmailProperty = MutableProperty<String?>(nil)
-  private let prefillPasswordProperty = MutableProperty<String?>(nil)
-  public func onePasswordFoundLogin(email email: String?, password: String?) {
+  fileprivate let prefillEmailProperty = MutableProperty<String?>(nil)
+  fileprivate let prefillPasswordProperty = MutableProperty<String?>(nil)
+  public func onePasswordFoundLogin(email: String?, password: String?) {
     self.prefillEmailProperty.value = email
     self.prefillPasswordProperty.value = password
   }
-  private let onePasswordIsAvailable = MutableProperty(false)
+  fileprivate let onePasswordIsAvailableProperty = MutableProperty(false)
   public func onePassword(isAvailable available: Bool) {
-    self.onePasswordIsAvailable.value = available
+    self.onePasswordIsAvailableProperty.value = available
   }
-  private let emailTextFieldDoneEditingProperty = MutableProperty(())
+  fileprivate let emailTextFieldDoneEditingProperty = MutableProperty(())
   public func emailTextFieldDoneEditing() {
     self.emailTextFieldDoneEditingProperty.value = ()
   }
-  private let passwordTextFieldDoneEditingProperty = MutableProperty(())
+  fileprivate let passwordTextFieldDoneEditingProperty = MutableProperty(())
   public func passwordTextFieldDoneEditing() {
     self.passwordTextFieldDoneEditingProperty.value = ()
   }
-  private let environmentLoggedInProperty = MutableProperty(())
+  fileprivate let environmentLoggedInProperty = MutableProperty(())
   public func environmentLoggedIn() {
     self.environmentLoggedInProperty.value = ()
   }
-  private let resetPasswordPressedProperty = MutableProperty(())
+  fileprivate let resetPasswordPressedProperty = MutableProperty(())
   public func resetPasswordButtonPressed() {
     self.resetPasswordPressedProperty.value = ()
   }
-  private let viewDidLoadProperty = MutableProperty()
+
+  fileprivate let shouldShowPasswordProperty = MutableProperty(false)
+  public func showHidePasswordButtonTapped() {
+    self.shouldShowPasswordProperty.value = shouldShowPasswordProperty.negate().value
+  }
+
+  fileprivate let viewDidLoadProperty = MutableProperty(())
   public func viewDidLoad() {
     self.viewDidLoadProperty.value = ()
   }
@@ -219,16 +241,17 @@ public final class LoginViewModel: LoginViewModelType, LoginViewModelInputs, Log
   public let emailTextFieldBecomeFirstResponder: Signal<(), NoError>
   public let isFormValid: Signal<Bool, NoError>
   public let logIntoEnvironment: Signal<AccessTokenEnvelope, NoError>
-  public var onePasswordButtonHidden: Signal<Bool, NoError>
+  public var onePasswordButtonIsHidden: Signal<Bool, NoError>
   public let onePasswordFindLoginForURLString: Signal<String, NoError>
   public let passwordText: Signal<String, NoError>
   public let passwordTextFieldBecomeFirstResponder: Signal<(), NoError>
-  public let postNotification: Signal<NSNotification, NoError>
+  public let postNotification: Signal<(Notification, Notification), NoError>
   public let showError: Signal<String, NoError>
   public let showResetPassword: Signal<(), NoError>
+  public let showHidePasswordButtonToggled: Signal<Bool, NoError>
   public let tfaChallenge: Signal<(email: String, password: String), NoError>
 }
 
-private func isValid(email email: String, password: String) -> Bool {
-  return isValidEmail(email) && !password.characters.isEmpty
+private func isValid(email: String, password: String) -> Bool {
+  return isValidEmail(email) && !password.isEmpty
 }

@@ -4,28 +4,27 @@ import Prelude
 import UIKit
 
 internal protocol EmptyStatesViewControllerDelegate: class {
-  func emptyStatesViewController(viewController: EmptyStatesViewController,
+  func emptyStatesViewController(_ viewController: EmptyStatesViewController,
                                  goToDiscoveryWithParams params: DiscoveryParams?)
   func emptyStatesViewControllerGoToFriends()
 }
 
 internal final class EmptyStatesViewController: UIViewController {
 
-  @IBOutlet private weak var backgroundGradientView: GradientView!
-  @IBOutlet private weak var backgroundStripView: UIView!
-  @IBOutlet private weak var mainButton: UIButton!
-  @IBOutlet private weak var mainButtonBottomLayoutConstraint: NSLayoutConstraint!
-  @IBOutlet private weak var headlineStackView: UIStackView!
-  @IBOutlet private weak var stripViewTopLayoutConstraint: NSLayoutConstraint!
-  @IBOutlet private weak var subtitleLabel: UILabel!
-  @IBOutlet private weak var titleLabel: UILabel!
+  @IBOutlet fileprivate weak var backgroundStripView: UIView!
+  @IBOutlet fileprivate weak var mainButton: UIButton!
+  @IBOutlet fileprivate weak var mainButtonBottomLayoutConstraint: NSLayoutConstraint!
+  @IBOutlet fileprivate weak var headlineStackView: UIStackView!
+  @IBOutlet fileprivate weak var stripViewTopLayoutConstraint: NSLayoutConstraint!
+  @IBOutlet fileprivate weak var subtitleLabel: UILabel!
+  @IBOutlet fileprivate weak var titleLabel: UILabel!
 
   internal weak var delegate: EmptyStatesViewControllerDelegate?
 
-  private let viewModel: EmptyStatesViewModelType = EmptyStatesViewModel()
+  fileprivate let viewModel: EmptyStatesViewModelType = EmptyStatesViewModel()
 
-  internal static func configuredWith(emptyState emptyState: EmptyState?) -> EmptyStatesViewController {
-    let vc = Storyboard.EmptyStates.instantiate(EmptyStatesViewController)
+  internal static func configuredWith(emptyState: EmptyState?) -> EmptyStatesViewController {
+    let vc = Storyboard.EmptyStates.instantiate(EmptyStatesViewController.self)
     vc.viewModel.inputs.configureWith(emptyState: emptyState)
     return vc
   }
@@ -36,119 +35,93 @@ internal final class EmptyStatesViewController: UIViewController {
     self.mainButton.addTarget(
       self,
       action: #selector(mainButtonTapped),
-      forControlEvents: .TouchUpInside
+      for: .touchUpInside
     )
   }
 
-  override func viewWillAppear(animated: Bool) {
+  override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
 
     self.viewModel.inputs.viewWillAppear()
   }
 
-  // swiftlint:disable function_body_length
-  override func bindViewModel() {
+    override func bindViewModel() {
     super.bindViewModel()
 
     self.titleLabel.rac.text = self.viewModel.outputs.titleLabelText
-    self.titleLabel.rac.textColor = self.viewModel.outputs.titleLabelColor
-
     self.subtitleLabel.rac.text = self.viewModel.outputs.subtitleLabelText
-    self.subtitleLabel.rac.textColor = self.viewModel.outputs.subtitleLabelColor
-
-    self.backgroundStripView.rac.alpha = self.viewModel.outputs.backgroundStripViewAlpha
-    self.backgroundStripView.rac.backgroundColor = self.viewModel.outputs.backgroundStripViewColor
-
     self.mainButtonBottomLayoutConstraint.rac.constant = self.viewModel.outputs.bottomLayoutConstraintConstant
-
-    self.viewModel.outputs.backgroundGradientColorId
-      .observeForUI()
-      .observeNext { [weak self] in
-        let (endColor, startColor) = discoveryGradientColors(forCategoryId: $0)
-        self?.backgroundGradientView.setGradient([(startColor, 0.0), (endColor, 1.0)])
-    }
-
     self.mainButton.rac.title = self.viewModel.outputs.mainButtonText
-
-    self.viewModel.outputs.mainButtonBackgroundColor
-      .observeForUI()
-      .observeNext { [weak element = mainButton] in
-        element
-          ?|> UIButton.lens.backgroundColor(forState: .Normal) .~ $0
-    }
-
-    self.viewModel.outputs.mainButtonTitleColor
-      .observeForUI()
-      .observeNext { [weak element = mainButton] in
-        element
-          ?|> UIButton.lens.titleColor(forState: .Normal) .~ $0
-          ?|> UIButton.lens.titleColor(forState: .Highlighted) .~ $0
-    }
-
-    self.viewModel.outputs.mainButtonBorderColor
-      .observeForUI()
-      .observeNext { [weak element = mainButton] in
-        element ?|> UIButton.lens.layer.borderColor .~ $0
-    }
 
     self.viewModel.outputs.notifyDelegateToGoToDiscovery
       .observeForControllerAction()
-      .observeNext { [weak self] params in
+      .observeValues { [weak self] params in
         guard let _self = self else { return }
         _self.delegate?.emptyStatesViewController(_self, goToDiscoveryWithParams: params)
     }
 
     self.viewModel.outputs.notifyDelegateToGoToFriends
       .observeForControllerAction()
-      .observeNext { [weak self] in
+      .observeValues { [weak self] in
         self?.delegate?.emptyStatesViewControllerGoToFriends()
     }
   }
-  // swiftlint:enable function_body_length
 
   override func bindStyles() {
     super.bindStyles()
 
     self.stripViewTopLayoutConstraint.constant = -Styles.grid(3)
 
-    self.view
-      |> UIView.lens.layoutMargins .~ self.traitCollection.isRegularRegular
-        ? .init(top: 0, left: Styles.grid(4), bottom: Styles.grid(5), right: Styles.grid(4))
-        : .init(top: 0, left: Styles.grid(2), bottom: Styles.grid(3), right: Styles.grid(2))
+    _ = self.view
+      |> UIView.lens.backgroundColor .~ .white
+      |> UIView.lens.layoutMargins .~ (
+        self.traitCollection.isRegularRegular
+          ? .init(top: 0, left: Styles.grid(4), bottom: Styles.grid(5), right: Styles.grid(4))
+          : .init(top: 0, left: Styles.grid(2), bottom: Styles.grid(3), right: Styles.grid(2))
+    )
 
     if self.traitCollection.isRegularRegular {
-      self.titleLabel |> UILabel.lens.font .~ UIFont.ksr_headline(size: 46).bolded
-      self.subtitleLabel |> UILabel.lens.font .~ .ksr_callout(size: 22)
+      _ = self.titleLabel |> UILabel.lens.font .~ UIFont.ksr_headline(size: 46).bolded
+      _ = self.subtitleLabel |> UILabel.lens.font .~ .ksr_callout(size: 22)
     } else if self.traitCollection.isVerticallyCompact {
-      self.titleLabel |> UILabel.lens.font .~ UIFont.ksr_headline(size: 26).bolded
-      self.subtitleLabel |> UILabel.lens.font .~ .ksr_callout(size: 13)
+      _ = self.titleLabel |> UILabel.lens.font .~ UIFont.ksr_headline(size: 26).bolded
+      _ = self.subtitleLabel |> UILabel.lens.font .~ .ksr_callout(size: 13)
     } else {
-      self.titleLabel |> UILabel.lens.font .~ UIFont.ksr_headline(size: 36).bolded
-      self.subtitleLabel |> UILabel.lens.font .~ .ksr_callout()
+      _ = self.titleLabel |> UILabel.lens.font .~ UIFont.ksr_headline(size: 36).bolded
+      _ = self.subtitleLabel |> UILabel.lens.font .~ .ksr_callout()
     }
 
-    self.titleLabel
-      |> UILabel.lens.textAlignment .~ .Left
+    _ = self.titleLabel
+      |> UILabel.lens.textAlignment .~ .left
       |> UILabel.lens.numberOfLines .~ 0
+      |> UILabel.lens.textColor .~ .ksr_soft_black
 
-    self.subtitleLabel
-      |> UILabel.lens.textAlignment .~ .Left
+    _ = self.subtitleLabel
+      |> UILabel.lens.textAlignment .~ .left
       |> UILabel.lens.numberOfLines .~ 0
+      |> UILabel.lens.textColor .~ .ksr_soft_black
 
-    self.headlineStackView
+    _ = self.headlineStackView
       |> UIStackView.lens.spacing .~ Styles.grid(2)
-      |> UIStackView.lens.layoutMarginsRelativeArrangement .~ true
+      |> UIStackView.lens.isLayoutMarginsRelativeArrangement .~ true
       |> UIStackView.lens.layoutMargins .~ .init(top: Styles.grid(1),
                                                  left: Styles.grid(4),
                                                  bottom: Styles.grid(7),
                                                  right: Styles.grid(4))
 
-    self.mainButton
+    _ = self.mainButton
       |> baseButtonStyle
       |> UIButton.lens.layer.borderWidth .~ 1.0
+      |> UIButton.lens.backgroundColor(for: .normal) .~ UIColor.ksr_green_500.withAlphaComponent(0.1)
+      |> UIButton.lens.titleColor(for: .normal) .~ .ksr_text_green_700
+      |> UIButton.lens.titleColor(for: .highlighted) .~ .ksr_text_green_700
+      |> UIButton.lens.layer.borderColor .~ UIColor.ksr_green_700.withAlphaComponent(0.2).cgColor
+
+    _ = self.backgroundStripView
+      |> UIView.lens.backgroundColor .~ .ksr_grey_100
   }
 
-  internal func setEmptyState(emptyState: EmptyState) {
+  internal func setEmptyState(_ emptyState: EmptyState) {
     self.viewModel.inputs.setEmptyState(emptyState)
   }
 

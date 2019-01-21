@@ -2,6 +2,11 @@ import Library
 import KsApi
 import UIKit
 
+struct DiscoveryProjectCellRowValue {
+  let project: Project
+  let category: KsApi.Category?
+}
+
 internal final class DiscoveryProjectsDataSource: ValueCellDataSource {
   internal enum Section: Int {
     case onboarding
@@ -9,7 +14,7 @@ internal final class DiscoveryProjectsDataSource: ValueCellDataSource {
     case projects
   }
 
-  func load(activities activities: [Activity]) {
+  func load(activities: [Activity]) {
     let section = Section.activitySample.rawValue
 
     self.clearValues(section: section)
@@ -26,30 +31,36 @@ internal final class DiscoveryProjectsDataSource: ValueCellDataSource {
     }
   }
 
-  func load(projects projects: [Project]) {
+  func load(projects: [Project], params: DiscoveryParams? = nil) {
     self.clearValues(section: Section.projects.rawValue)
 
     projects.forEach { project in
-      self.appendRow(
-        value: project,
+      let value = DiscoveryProjectCellRowValue(project: project, category: params?.category)
+
+      _ = self.appendRow(
+        value: value,
         cellClass: DiscoveryPostcardCell.self,
         toSection: Section.projects.rawValue
       )
     }
   }
 
-  func show(onboarding onboarding: Bool) {
+  func show(onboarding: Bool) {
     self.set(values: onboarding ? [()] : [],
              cellClass: DiscoveryOnboardingCell.self,
              inSection: Section.onboarding.rawValue)
   }
 
-  internal func activityAtIndexPath(indexPath: NSIndexPath) -> Activity? {
+  internal func activityAtIndexPath(_ indexPath: IndexPath) -> Activity? {
     return self[indexPath] as? Activity
   }
 
-  internal func projectAtIndexPath(indexPath: NSIndexPath) -> Project? {
-    return self[indexPath] as? Project
+  internal func projectAtIndexPath(_ indexPath: IndexPath) -> Project? {
+    return (self[indexPath] as? DiscoveryProjectCellRowValue)?.project
+  }
+
+  internal func indexPath(forProjectRow row: Int) -> IndexPath {
+    return IndexPath(item: row, section: Section.projects.rawValue)
   }
 
   override func configureCell(tableCell cell: UITableViewCell, withValue value: Any) {
@@ -61,7 +72,7 @@ internal final class DiscoveryProjectsDataSource: ValueCellDataSource {
       cell.configureWith(value: value)
     case let (cell as ActivitySampleProjectCell, value as Activity):
       cell.configureWith(value: value)
-    case let (cell as DiscoveryPostcardCell, value as Project):
+    case let (cell as DiscoveryPostcardCell, value as DiscoveryProjectCellRowValue):
       cell.configureWith(value: value)
     case let (cell as DiscoveryOnboardingCell, value as Void):
       cell.configureWith(value: value)

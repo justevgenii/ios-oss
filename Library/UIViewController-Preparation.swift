@@ -3,70 +3,98 @@ import UIKit
 import Prelude
 import Prelude_UIKit
 
-extension UIViewController {
-  public override class func initialize() {
-    struct Static {
-      static var token: dispatch_once_t = 0
-    }
+private func swizzle(_ vc: UIViewController.Type) {
 
-    // make sure this isn't a subclass
-    guard self === UIViewController.self else { return }
+  [
+    (#selector(vc.viewDidLoad), #selector(vc.ksr_viewDidLoad)),
+    (#selector(vc.viewWillAppear(_:)), #selector(vc.ksr_viewWillAppear(_:))),
+    (#selector(vc.traitCollectionDidChange(_:)), #selector(vc.ksr_traitCollectionDidChange(_:))),
+    ].forEach { original, swizzled in
 
-    dispatch_once(&Static.token) {
-      [
-        (#selector(viewDidLoad), #selector(ksr_viewDidLoad)),
-        (#selector(traitCollectionDidChange(_:)), #selector(ksr_traitCollectionDidChange(_:))),
-        ].forEach { original, swizzled in
+      guard let originalMethod = class_getInstanceMethod(vc, original),
+        let swizzledMethod = class_getInstanceMethod(vc, swizzled) else { return }
 
-        let originalMethod = class_getInstanceMethod(self, original)
-        let swizzledMethod = class_getInstanceMethod(self, swizzled)
+      let didAddViewDidLoadMethod = class_addMethod(vc,
+                                                    original,
+                                                    method_getImplementation(swizzledMethod),
+                                                    method_getTypeEncoding(swizzledMethod))
 
-        let didAddViewDidLoadMethod = class_addMethod(self,
-          original,
-          method_getImplementation(swizzledMethod),
-          method_getTypeEncoding(swizzledMethod))
-
-        if didAddViewDidLoadMethod {
-          class_replaceMethod(self,
-            swizzled,
-            method_getImplementation(originalMethod),
-            method_getTypeEncoding(originalMethod))
-        } else {
-          method_exchangeImplementations(originalMethod, swizzledMethod)
-        }
+      if didAddViewDidLoadMethod {
+        class_replaceMethod(vc,
+                            swizzled,
+                            method_getImplementation(originalMethod),
+                            method_getTypeEncoding(originalMethod))
+      } else {
+        method_exchangeImplementations(originalMethod, swizzledMethod)
       }
-    }
+  }
+}
+
+private var hasSwizzled = false
+
+extension UIViewController {
+  final public class func doBadSwizzleStuff() {
+    guard !hasSwizzled else { return }
+
+    hasSwizzled = true
+    swizzle(self)
   }
 
-  internal func ksr_viewDidLoad(animated: Bool) {
-    self.ksr_viewDidLoad(animated)
+  @objc internal func ksr_viewDidLoad() {
+    self.ksr_viewDidLoad()
     self.bindViewModel()
+  }
+
+  @objc internal func ksr_viewWillAppear(_ animated: Bool) {
+    self.ksr_viewWillAppear(animated)
+
+    if !self.hasViewAppeared {
+      self.bindStyles()
+      self.hasViewAppeared = true
+    }
   }
 
   /**
    The entry point to bind all view model outputs. Called just before `viewDidLoad`.
    */
-  public func bindViewModel() {
+  @objc open func bindViewModel() {
   }
 
   /**
    The entry point to bind all styles to UI elements. Called just after `viewDidLoad`.
    */
-  public func bindStyles() {
+  @objc open func bindStyles() {
   }
 
-  public func ksr_traitCollectionDidChange(previousTraitCollection: UITraitCollection?) {
+  @objc public func ksr_traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
     self.ksr_traitCollectionDidChange(previousTraitCollection)
     self.bindStyles()
+  }
+
+  private struct AssociatedKeys {
+    static var hasViewAppeared = "hasViewAppeared"
+  }
+
+  // Helper to figure out if the `viewWillAppear` has been called yet
+  private var hasViewAppeared: Bool {
+    get {
+      return (objc_getAssociatedObject(self, &AssociatedKeys.hasViewAppeared) as? Bool) ?? false
+    }
+    set {
+      objc_setAssociatedObject(self,
+                               &AssociatedKeys.hasViewAppeared,
+                               newValue,
+                               .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
   }
 }
 
 extension UIViewController {
   public static var defaultNib: String {
-    return self.description().componentsSeparatedByString(".").dropFirst().joinWithSeparator(".")
+    return self.description().components(separatedBy: ".").dropFirst().joined(separator: ".")
   }
 
   public static var storyboardIdentifier: String {
-    return self.description().componentsSeparatedByString(".").dropFirst().joinWithSeparator(".")
+    return self.description().components(separatedBy: ".").dropFirst().joined(separator: ".")
   }
 }

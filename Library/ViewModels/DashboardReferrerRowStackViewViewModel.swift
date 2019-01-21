@@ -1,12 +1,12 @@
 import KsApi
 import Prelude
-import ReactiveCocoa
+import ReactiveSwift
 import ReactiveExtensions
 import Result
 
 public protocol DashboardReferrerRowStackViewViewModelInputs {
   /// Call to configure cell with referrer data.
-  func configureWith(country country: Project.Country, referrer: ProjectStatsEnvelope.ReferrerStats)
+  func configureWith(country: Project.Country, referrer: ProjectStatsEnvelope.ReferrerStats)
 }
 
 public protocol DashboardReferrerRowStackViewViewModelOutputs {
@@ -32,13 +32,13 @@ public final class DashboardReferrerRowStackViewViewModel: DashboardReferrerRowS
   DashboardReferrerRowStackViewViewModelOutputs, DashboardReferrerRowStackViewViewModelType {
 
   public init() {
-    let countryReferrer = self.countryReferrerProperty.signal.ignoreNil()
+    let countryReferrer = self.countryReferrerProperty.signal.skipNil()
 
     self.backersText = countryReferrer.map { _, referrer in Format.wholeNumber(referrer.backersCount) }
 
     self.pledgedText = countryReferrer
       .map { country, referrer in
-        Format.currency(referrer.pledged, country: country) + " ("
+        Format.currency(Int(referrer.pledged), country: country) + " ("
           + Format.percentage(referrer.percentageOfDollars) + ")"
     }
 
@@ -46,7 +46,7 @@ public final class DashboardReferrerRowStackViewViewModel: DashboardReferrerRowS
 
     self.textColor = countryReferrer.map { _, referrer in
       switch referrer.referrerType {
-      case .`internal`:
+      case .internal:
         return .ksr_green_700
       case .external:
         return .ksr_orange_400
@@ -56,9 +56,9 @@ public final class DashboardReferrerRowStackViewViewModel: DashboardReferrerRowS
     }
   }
 
-  private let countryReferrerProperty =
+  fileprivate let countryReferrerProperty =
     MutableProperty<(Project.Country, ProjectStatsEnvelope.ReferrerStats)?>(nil)
-  public func configureWith(country country: Project.Country, referrer: ProjectStatsEnvelope.ReferrerStats) {
+  public func configureWith(country: Project.Country, referrer: ProjectStatsEnvelope.ReferrerStats) {
     self.countryReferrerProperty.value = (country, referrer)
   }
 
